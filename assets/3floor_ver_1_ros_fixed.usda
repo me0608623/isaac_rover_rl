@@ -1,0 +1,251 @@
+#usda 1.0
+(
+    subLayers = [
+        @/home/aa/Ros/charge_rl/assets/3F/3floor_ver_1.usd@
+    ]
+)
+
+over "World"
+{
+    over "charger_rover4_5_0"
+    {
+        quatf xformOp:orient = (-0.017701223, -1.3554652e-20, -4.3374885e-19, 0.9998433)
+        double3 xformOp:translate = (0.33316419609739617, -1.7170889059246455, -0.19160448820952797)
+
+        over "charger_rover_urdf5"
+        {
+            over "transform_tree_odometry"
+            {
+                over "ros2_publish_odometry"
+                {
+                    custom string inputs:chassisFrameId = "base_footprint"
+                    custom string inputs:odomFrameId = "odom"
+                    custom double inputs:timeStamp
+                    double inputs:timeStamp.connect = </World/charger_rover4_5_0/charger_rover_urdf5/transform_tree_odometry/isaac_read_simulation_time.outputs:simulationTime>
+                    custom string inputs:topicName = "/odom_gt"
+                }
+
+                over "ros2_publish_raw_transform_tree"
+                {
+                    custom uint inputs:execIn
+                    uint inputs:execIn.connect = None
+                    custom string inputs:topicName = "/isaac_tf_disabled"
+                }
+
+                over "tf_tree_base_link_to_sensors"
+                {
+                    custom uint inputs:execIn
+                    uint inputs:execIn.connect = None
+                    custom string inputs:topicName = "/isaac_tf_disabled"
+                }
+
+                over "tf_tree_base_link_to_wheel_base"
+                {
+                    custom uint inputs:execIn
+                    uint inputs:execIn.connect = None
+                    custom string inputs:topicName = "/isaac_tf_disabled"
+                }
+
+                over "tf_tree_base_link_to_base_footprint"
+                {
+                    custom uint inputs:execIn
+                    uint inputs:execIn.connect = None
+                    custom string inputs:topicName = "/isaac_tf_disabled"
+                }
+            }
+
+            over "velodyne_01"
+            {
+                over "ros2_publish_point_cloud"
+                {
+                    custom string inputs:frameId = "velodyne_link"
+                    custom double inputs:timeStamp
+                    double inputs:timeStamp.connect = </World/charger_rover4_5_0/charger_rover_urdf5/velodyne_01/isaac_read_simulation_time.outputs:simulationTime>
+                    custom string inputs:topicName = "/velodyne_points_ideal"
+                }
+            }
+
+            over "chassis_imu"
+            {
+                over "ros2_publish_imu"
+                {
+                    custom string inputs:frameId = "imu_link"
+                }
+            }
+
+            over "ros_lidars"
+            {
+                over "publish_front_2d_lidar_scan"
+                {
+                    custom bool inputs:enabled = 0
+                    custom uint inputs:execIn
+                    uint inputs:execIn.connect = None
+                    custom string inputs:frameId = "ydlidar_front_link"
+                }
+
+                over "publish_back_2d_lidar_scan"
+                {
+                    custom bool inputs:enabled = 0
+                    custom uint inputs:execIn
+                    uint inputs:execIn.connect = None
+                    custom string inputs:frameId = "ydlidar_back_link"
+                }
+
+                over "front_2d_lidar_render_product"
+                {
+                    custom bool inputs:enabled = 0
+                    custom uint inputs:execIn
+                    uint inputs:execIn.connect = None
+                }
+
+                over "back_2d_lidar_render_product"
+                {
+                    custom bool inputs:enabled = 0
+                    custom uint inputs:execIn
+                    uint inputs:execIn.connect = None
+                }
+
+                over "isaac_run_one_simulation_frame"
+                {
+                    custom uint inputs:execIn
+                    uint inputs:execIn.connect = None
+                }
+            }
+
+            over "velodyne"
+            {
+                double3 xformOp:translate = (0.003693200143232614, -0.000002302795443204066, 1.3009369579615273)
+
+                over "Lidar"
+                {
+                    float maxRange = 40
+                }
+            }
+
+            over "differential_drive"
+            {
+                over "differential_controller"
+                {
+                    custom double inputs:maxAcceleration = 1.2
+                    custom double inputs:maxAngularSpeed = 1.2
+                    custom double inputs:maxDeceleration = 1.2
+                    custom double inputs:maxLinearSpeed = 1.5
+                    custom double inputs:wheelDistance = 0.559212
+                    custom double inputs:wheelRadius = 0.120947
+                }
+            }
+
+            over "velodyne_base_mount_joint"
+            {
+                point3f physics:localPos0 = (-0.02000006, 1.5487963e-9, 1.29634)
+            }
+        }
+    }
+
+    over "NavFloor_H"
+    {
+        double3 xformOp:translate = (-4, 5.5, -0.4233022191647538)
+    }
+
+    over "NavFloor_V1"
+    {
+        double3 xformOp:translate = (-4, -8, -0.4233022191647538)
+    }
+
+    over "NavFloor_V2"
+    {
+        double3 xformOp:translate = (-4, 19, -0.4233022191647538)
+    }
+
+    def Xform "SimObstacles"
+    {
+        def Cylinder "person_a" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.8619548142719902, 5.823251735923353, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "person_b" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.32372076205911093, 8.908750740142688, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "person_c" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.532751388233967, 12.28931947113622, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cube "cart_a" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+            double size = 1
+            matrix4d xformOp:transform = ( (0.7, 0, 0, 0), (0, 0.5, 0, 0), (0, 0, 0.9, 0), (0.058559040144000596, 7.5304585863411, 0.12669778232536233, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cube "cart_b" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+            double size = 1
+            matrix4d xformOp:transform = ( (0.8, 0, 0, 0), (0, 0.6, 0, 0), (0, 0, 1, 0), (1.3725200763540162, 14.322623660551379, 0.17669778232536232, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+    }
+
+    def OmniGraph "ROS_Clock"
+    {
+        custom token evaluationMode = "Automatic"
+        custom token evaluator:type = "execution"
+        custom token fabricCacheBacking = "StageWithoutHistory"
+        custom int2 fileFormatVersion = (1, 9)
+        custom token pipelineStage = "pipelineStageSimulation"
+
+        def OmniGraphNode "on_playback_tick"
+        {
+            custom token node:type = "omni.graph.action.OnPlaybackTick"
+            custom int node:typeVersion = 1
+        }
+
+        def OmniGraphNode "isaac_read_simulation_time"
+        {
+            custom token node:type = "isaacsim.core.nodes.IsaacReadSimulationTime"
+            custom int node:typeVersion = 1
+        }
+
+        def OmniGraphNode "ros2_publish_clock"
+        {
+            custom uint inputs:execIn
+            uint inputs:execIn.connect = </World/ROS_Clock/on_playback_tick.outputs:tick>
+            custom double inputs:timeStamp
+            double inputs:timeStamp.connect = </World/ROS_Clock/isaac_read_simulation_time.outputs:simulationTime>
+            custom string inputs:topicName = "clock"
+            custom token node:type = "isaacsim.ros2.bridge.ROS2PublishClock"
+            custom int node:typeVersion = 1
+        }
+    }
+}
+
