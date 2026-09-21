@@ -89,6 +89,11 @@ def _py(script: str, *args, name: str = "", condition=None) -> ExecuteProcess:
     )
 
 
+def _vo_enabled(context) -> bool:
+    """enable_vo 是否為真（launch 參數傳進來是字串）。"""
+    return LaunchConfiguration("enable_vo").perform(context).lower() in ("true", "1", "yes")
+
+
 def generate_launch_description() -> LaunchDescription:
     routing_share = Path(get_package_share_directory("campusrover_routing")) / "share" / "node_module"
     desc_share = Path(get_package_share_directory("campusrover_description"))
@@ -100,7 +105,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("enable_policy", default_value="true"),
         DeclareLaunchArgument(
             "enable_vo", default_value="true",
-            help="插入車端的 vo_safety_node（前方 LiDAR 安全煞）。"
+            description="插入車端的 vo_safety_node（前方 LiDAR 安全煞）。"
                  "true(預設)=對應實車：policy→/rover_rl/cmd_vel_desired→vo_safety→/cmd_vel；"
                  "false=純 RL policy 直接發 /cmd_vel（測 policy 本身用）。"),
         DeclareLaunchArgument("enable_rviz", default_value="true"),

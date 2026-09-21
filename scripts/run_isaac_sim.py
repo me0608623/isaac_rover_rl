@@ -50,11 +50,10 @@ def main() -> int:
                     help="People 角色的光達可見性："
                          "parts=逐部位碰撞體（跟著骨架動畫擺動，預設）；"
                          "whole=整具一塊（凍結在 T-pose）；off=不套（看得到打不到）")
-    ap.add_argument("--colliders-for", choices=("walkers", "all"), default="walkers",
-                    help="哪些角色要有碰撞體。walkers(預設)=只給會走路的；"
-                         "all=全部 19 人。⚠ 給全部會讓 NDT 掃描裡出現大量地圖上"
-                         "沒有的結構（實測即時點雲與地圖重疊率 100%%→48.7%%），"
-                         "NDT 匹配不收斂而漂移（map→odom z 飄到 -1.95 m、roll -6.3°）。")
+    ap.add_argument("--colliders-for", choices=("all", "walkers"), default="all",
+                    help="哪些角色要有碰撞體。all(預設)=全部；walkers=只給會走路的。"
+                         "⚠ 2026-09-21 曾預設 walkers，理由是「角色點雲污染 NDT」——"
+                         "該假設已被對照實驗推翻，見下方 _colliders_note。")
     ap.add_argument("--part-approx", choices=("convexHull", "none"),
                     default="convexHull",
                     help="部位碰撞體的近似。convexHull(預設)便宜且逐部位後幾乎不損"
@@ -273,10 +272,25 @@ def main() -> int:
                 _walks.append((_c.GetName(),
                                [(_t[0], _t[1] + 4.0), (_t[0], _t[1] - 4.0)]))
 
-        # ⚠ 站著不動的角色對導航測試毫無貢獻，卻會在 NDT 的掃描裡塞進大量
-        #   地圖上不存在的結構 —— 實測即時點雲與地圖的重疊率從 100% 掉到
-        #   48.7%，NDT 匹配不收斂，map→odom 飄到 z=-1.95 m、roll=-6.3°。
-        #   預設只給「會走路的角色」碰撞體。
+        # ⚠⚠ 這裡曾經預設只給「會走路的角色」碰撞體，理由是「角色點雲污染 NDT」。
+        #   **該假設已被對照實驗推翻**（2026-09-21，車靜止 60 s）：
+        #
+        #       角色數    傾角最大   水平漂移    後半段−前半段
+        #          0       1.65°     0.001 m      +0.00°
+        #          5       1.89°     0.017 m      -0.04°
+        #         19       2.08°     0.022 m      -0.04°
+        #
+        #   0→19 個角色只差 0.43°，三組皆無惡化趨勢；對照導航失敗時的 18.76°
+        #   （且呈 2°→8°→18° 單調爬升），角色的影響連零頭都不到。
+        #
+        #   原本的證據（「即時點雲與地圖重疊率 100%→48.7%」）是**錯的量測**：
+        #   /filtered_points 在感測器座標系、/ndt_points_map 在 map 座標系，
+        #   比對不同座標系的體素得到的數字沒有意義。
+        #
+        #   更根本的推理錯誤：**實車也有行人且定位正常**，所以行人不可能是元凶。
+        #   模擬出問題而實機正常時，要找的是**兩者不一樣**的東西。
+        #
+        #   保留 walkers 選項只為了重現當時的條件，預設已還原為 all。
         import ros_graph_spec as _S1
         _walk_names = {w.name for w in _S1.DEFAULT_CHARACTER_WALKS}
         if args.colliders_for == "walkers":

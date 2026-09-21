@@ -15,6 +15,8 @@ import argparse
 import math
 import sys
 
+import json
+
 import numpy as np
 
 #: 碰撞判定：LiDAR 量到的最近距離低於此值即視為撞上。
@@ -31,6 +33,10 @@ def main() -> int:
                          "例：c25,c28 = 去程 + 回程（來回對照）")
     ap.add_argument("--start", default="c28", help="第一段的起點站名")
     ap.add_argument("--seconds", type=float, default=90.0, help="每段的逾時")
+    ap.add_argument("--tag", default="", help="這次實驗的標籤，寫進 CSV 檔名")
+    ap.add_argument("--log-dir", default="",
+                    help="逐時刻記錄寫到這個目錄（每段一個 CSV）。彙總數字看不出"
+                         "「在哪一段、因為什麼停下來」，要診斷就得有時間序列。")
     args = ap.parse_args()
 
     sys.path.insert(0, str(__file__.rsplit("/", 1)[0]))
@@ -47,13 +53,15 @@ def main() -> int:
     from rclpy.node import Node
     from rclpy.qos import qos_profile_sensor_data
     from geometry_msgs.msg import Twist
+    from std_msgs.msg import String
     from sensor_msgs.msg import PointCloud2
     from sensor_msgs_py import point_cloud2
     from tf2_ros import Buffer, TransformListener
     import rclpy.time
     from campusrover_msgs.srv import RoutingPath
 
-    state = {"traj": [], "minrng": [], "cmd": [], "t": []}
+    state = {"traj": [], "minrng": [], "cmd": [], "t": [], "vo": [],
+             "mo": [], "series": []}
 
     class Mon(Node):
         def __init__(self):
@@ -63,6 +71,10 @@ def main() -> int:
             self.create_subscription(PointCloud2, "/velodyne_points",
                                      self.on_cloud, qos_profile_sensor_data)
             self.create_subscription(Twist, "/cmd_vel", self.on_cmd, 10)
+            # VO 安全煞的介入狀態（""/slow/stop/reverse/freeze）。
+            # 這比成功率更能說明「policy 有多少次撐不住、需要硬底線接手」。
+            self.create_subscription(String, "/vo_safety_node/status",
+                                     self.on_vo, 10)
             self.create_timer(0.1, self.on_tick)
             self.routing = self.create_client(RoutingPath,
                                               "/routing_to_path/routing_call")
@@ -78,6 +90,29 @@ def main() -> int:
                 return          # 物理爆掉時會出現 NaN，別讓它污染統計
             state["traj"].append((t.x, t.y))
             state["t"].append(self.get_clock().now().nanoseconds * 1e-9)
+            # ⚠ NDT 漂移的定義就是「map→odom 本該準靜態，卻隨時間變動」。
+            #   走廊導航是平面問題，健康時 roll/pitch 應貼近 0；
+            #   2026-09-21 曾飄到 z=-1.95 m、roll=-6.3°，導航隨之亂繞。
+            try:
+                mo = self.tf_buf.lookup_transform("map", "odom", rclpy.time.Time())
+            except Exception:
+                return
+            q = mo.transform.rotation
+            roll = math.atan2(2 * (q.w * q.x + q.y * q.z),
+                              1 - 2 * (q.x * q.x + q.y * q.y))
+            pitch = math.asin(max(-1.0, min(1.0, 2 * (q.w * q.y - q.z * q.x))))
+            state["mo"].append((mo.transform.translation.x,
+                                mo.transform.translation.y,
+                                mo.transform.translation.z, roll, pitch))
+            # 逐時刻快照：位置 + 當下 VO 狀態 + 當下最近障礙 + 當下命令速度。
+            # 四者同一時間戳才能回答「它在哪裡、為什麼停」。
+            state["series"].append((
+                state["t"][-1], t.x, t.y,
+                state["vo"][-1] if state["vo"] else "",
+                state["minrng"][-1] if state["minrng"] else float("nan"),
+                state["cmd"][-1][0] if state["cmd"] else float("nan"),
+                math.degrees(abs(roll)), math.degrees(abs(pitch)),
+            ))
 
         def on_cloud(self, m):
             pts = point_cloud2.read_points_numpy(m, field_names=("x", "y", "z"))
@@ -94,6 +129,13 @@ def main() -> int:
 
         def on_cmd(self, m):
             state["cmd"].append((m.linear.x, m.angular.z))
+
+        def on_vo(self, m):
+            try:
+                d = json.loads(m.data)
+            except Exception:
+                return
+            state["vo"].append(str(d.get("front_brake", "") or ""))
 
         def send_routing(self, origin: str, dest: str) -> bool:
             if not self.routing.wait_for_service(timeout_sec=10.0):
@@ -144,6 +186,39 @@ def main() -> int:
               f"路徑 {dist:.2f} m  距目標 {gap:.2f} m")
         print(f"  最近障礙 最小 {rng.min():.2f} m / 中位 {np.median(rng):.2f} m　"
               f"碰撞幀 {n_coll}/{len(rng)}　|v| 平均 {np.abs(cmds[:,0]).mean():.3f}")
+        vo = state["vo"]
+        if vo:
+            act = [v for v in vo if v]
+            from collections import Counter
+            tally = Counter(act)
+            detail = " ".join(f"{k}×{v}" for k, v in tally.most_common())
+            print(f"  VO 安全煞介入 {len(act)}/{len(vo)} 幀 "
+                  f"({len(act)/len(vo)*100:.1f}%)" + (f"　{detail}" if detail else ""))
+        else:
+            print("  VO 安全煞：沒收到 status（節點沒跑？）")
+        mo = np.array(state["mo"]) if state["mo"] else None
+        if mo is not None and len(mo) > 5:
+            dxy = np.hypot(mo[:, 0] - mo[0, 0], mo[:, 1] - mo[0, 1]).max()
+            dz = np.abs(mo[:, 2] - mo[0, 2]).max()
+            rp = np.degrees(np.abs(mo[:, 3:5])).max()
+            print(f"  NDT map→odom 漂移：水平 {dxy:.3f} m  垂直 {dz:.3f} m  "
+                  f"|roll|,|pitch| 最大 {rp:.2f}°"
+                  + ("  ⚠ 傾斜異常" if rp > 3.0 else ""))
+        if args.log_dir:
+            import csv, os
+            os.makedirs(args.log_dir, exist_ok=True)
+            tag = f"{args.tag}_" if args.tag else ""
+            fn = os.path.join(args.log_dir, f"{tag}leg{leg_i}_{origin}_to_{goal}.csv")
+            with open(fn, "w", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(["t", "map_x", "map_y", "vo_state", "min_range_m",
+                            "cmd_v", "roll_deg", "pitch_deg"])
+                t_zero = state["series"][0][0] if state["series"] else 0.0
+                for row in state["series"]:
+                    w.writerow([f"{row[0]-t_zero:.2f}"] + [f"{v:.3f}" if isinstance(v, float)
+                               else v for v in row[1:]])
+            print(f"  逐時刻記錄 → {fn}（{len(state['series'])} 筆）")
+
         results.append((f"{origin}→{goal}", ok, arrived if ok else args.seconds,
                         dist, gap, rng.min(), n_coll, len(rng)))
         origin = goal
