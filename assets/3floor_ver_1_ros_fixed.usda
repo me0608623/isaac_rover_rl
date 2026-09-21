@@ -201,7 +201,7 @@ over "World"
         {
             float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
             double size = 1
-            matrix4d xformOp:transform = ( (0.7, 0, 0, 0), (0, 0.5, 0, 0), (0, 0, 0.9, 0), (0.058559040144000596, 7.5304585863411, 0.12669778232536233, 1) )
+            matrix4d xformOp:transform = ( (0.7, 0, 0, 0), (0, 0.5, 0, 0), (0, 0, 1.15, 0), (0.058559040144000596, 7.5304585863411, 0.2516977823253623, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
@@ -211,8 +211,77 @@ over "World"
         {
             float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
             double size = 1
-            matrix4d xformOp:transform = ( (0.8, 0, 0, 0), (0, 0.6, 0, 0), (0, 0, 1, 0), (1.3725200763540162, 14.322623660551379, 0.17669778232536232, 1) )
+            matrix4d xformOp:transform = ( (0.8, 0, 0, 0), (0, 0.6, 0, 0), (0, 0, 1.25, 0), (1.3725200763540162, 14.322623660551379, 0.3016977823253623, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+    }
+
+    def Xform "SimMovingObstacles"
+    {
+        def Cylinder "walker_cross" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsRigidBodyAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            bool physics:kinematicEnabled = 1
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.8870076143703816, 8.046117099187034, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+
+            def Xform "visual" (
+                prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/People/Characters/F_Business_02/F_Business_02.usd@
+            )
+            {
+                matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, -0.85, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+            }
+        }
+
+        def Cylinder "walker_headon" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsRigidBodyAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            bool physics:kinematicEnabled = 1
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.3516422872417044, 15.835754229247213, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+
+            def Xform "visual" (
+                prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/People/Characters/M_Medical_01/M_Medical_01.usd@
+            )
+            {
+                matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, -0.85, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+            }
+        }
+
+        def Cylinder "walker_slow" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsRigidBodyAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            bool physics:kinematicEnabled = 1
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.21281553989913382, 9.47631465432414, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+
+            def Xform "visual" (
+                prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/People/Characters/F_Medical_01/F_Medical_01.usd@
+            )
+            {
+                matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, -0.85, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+            }
         }
     }
 

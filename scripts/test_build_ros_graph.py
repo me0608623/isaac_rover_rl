@@ -432,3 +432,67 @@ def test_clean_corridor_when_obstacles_empty(stage: Usd.Stage):
     """預設 spec 不放障礙物 —— 做定位基準時走廊要是淨空的。"""
     assert S.SimRosSpec().obstacles == ()
     assert not stage.GetPrimAtPath(B.OBSTACLE_ROOT).IsValid()
+
+
+# --------------------------------------------------------------------------
+# 移動行人 + 視覺外殼 + 原有角色的光達代理
+# --------------------------------------------------------------------------
+
+SENSOR_H = 1.43        # base_footprint → velodyne
+Z_FILTER = 0.5         # lidar_preprocessor_params_sa4r2.yaml
+
+
+@pytest.fixture(scope="module")
+def stage_with_people(tmp_path_factory) -> Usd.Stage:
+    from dataclasses import replace as _replace
+    out = tmp_path_factory.mktemp("usd_people") / "people.usda"
+    spec = S.SimRosSpec().with_tf_ownership(S.default_tf_ownership())
+    spec = _replace(spec,
+                    obstacles=S.DEFAULT_OBSTACLES,
+                    moving_obstacles=S.DEFAULT_MOVING_OBSTACLES)
+    B.build(SOURCE_USD, out, spec)
+    return Usd.Stage.Open(str(out))
+
+
+def test_moving_obstacles_are_kinematic_rigid_bodies(stage_with_people: Usd.Stage):
+    """只有 CollisionAPI 的靜態碰撞體每幀改 transform，PhysX 不保證 raycast 讀到新位置。"""
+    from pxr import UsdPhysics
+    for m in S.DEFAULT_MOVING_OBSTACLES:
+        prim = stage_with_people.GetPrimAtPath(f"{B.MOVING_ROOT}/{m.name}")
+        assert prim.IsValid(), m.name
+        assert prim.HasAPI(UsdPhysics.CollisionAPI), f"{m.name} 沒有碰撞體"
+        assert prim.HasAPI(UsdPhysics.RigidBodyAPI), f"{m.name} 不是剛體"
+        assert prim.GetAttribute("physics:kinematicEnabled").Get() is True
+
+
+def test_collider_cylinder_is_hidden_but_still_collides(stage_with_people: Usd.Stage):
+    """★ 視覺外殼的前提：visibility 是渲染屬性，不該影響 PhysX 碰撞體。
+
+    看到的是人形網格，量到的是圓柱 —— 兩者必須同時成立。
+    """
+    from pxr import UsdGeom as _UG, UsdPhysics
+    for m in S.DEFAULT_MOVING_OBSTACLES:
+        prim = stage_with_people.GetPrimAtPath(f"{B.MOVING_ROOT}/{m.name}")
+        assert _UG.Imageable(prim).GetVisibilityAttr().Get() == _UG.Tokens.invisible
+        assert prim.HasAPI(UsdPhysics.CollisionAPI)
+
+
+def test_visual_shell_must_not_have_its_own_collider(stage_with_people: Usd.Stage):
+    """★ 外殼若也帶碰撞體，同一個行人會被偵測兩次，近距離讀數偏近。"""
+    from pxr import UsdPhysics
+    for m in S.DEFAULT_MOVING_OBSTACLES:
+        shell = stage_with_people.GetPrimAtPath(f"{B.MOVING_ROOT}/{m.name}/visual")
+        assert shell.IsValid(), f"{m.name} 沒有視覺外殼"
+        assert not shell.HasAPI(UsdPhysics.CollisionAPI), f"{m.name} 外殼不該有碰撞體"
+
+
+def test_visual_shell_feet_reach_the_floor(stage_with_people: Usd.Stage):
+    """圓柱的原點在中心，人物網格的原點在腳底 —— 外殼要往下挪半個身高才不會浮空。"""
+    from pxr import UsdGeom as _UG
+    st = stage_with_people
+    floor = B.measure_corridor_floor_top(st)
+    cache = _UG.XformCache()
+    for m in S.DEFAULT_MOVING_OBSTACLES:
+        shell = st.GetPrimAtPath(f"{B.MOVING_ROOT}/{m.name}/visual")
+        z = cache.GetLocalToWorldTransform(shell).ExtractTranslation()[2]
+        assert z == pytest.approx(floor, abs=1e-3), f"{m.name} 外殼腳底 {z:.3f} vs 地板 {floor:.3f}"

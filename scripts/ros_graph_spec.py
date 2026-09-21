@@ -244,6 +244,8 @@ class SimRosSpec:
     enable_2d_lidars: bool = False
     #: 走廊障礙物。空 tuple = 淨空走廊（做定位基準時用）。
     obstacles: tuple = ()
+    #: 移動障礙物（行人）。空 tuple = 只有靜態障礙。
+    moving_obstacles: tuple = ()
 
     @property
     def isaac_point_cloud_topic(self) -> str:
@@ -410,8 +412,83 @@ DEFAULT_OBSTACLES: tuple[Obstacle, ...] = (
     Obstacle("person_a", -3.0, 6.3, "person"),
     Obstacle("person_b", -6.0, 5.4, "person"),
     Obstacle("person_c", -9.5, 6.2, "person"),
-    Obstacle("cart_a", -4.6, 5.3, "box", size_x=0.7, size_y=0.5, height=0.9),
-    Obstacle("cart_b", -11.5, 5.8, "box", size_x=0.8, size_y=0.6, height=1.0),
+    # ⚠ 高度必須 > sensor_h - z_filter = 1.43 - 0.5 = 0.93 m，否則整個落在
+    #   policy 可見帶下方 —— 有碰撞體（車撞得到）但 72 維觀測裡不存在。
+    #   原本 0.90 / 1.00 m 就是這種「撞得到但看不到」的組合，已抬高。
+    #   驗收見 obstacle_motion.lidar_visible_height 與其測試。
+    Obstacle("cart_a", -4.6, 5.3, "box", size_x=0.7, size_y=0.5, height=1.15),
+    Obstacle("cart_b", -11.5, 5.8, "box", size_x=0.8, size_y=0.6, height=1.25),
+)
+
+
+@dataclass(frozen=True)
+class MovingObstacle:
+    """沿折線等速往返的動態障礙物（行人／推車）。
+
+    與 :class:`Obstacle` 同樣用帶碰撞體的幾何代理，理由見該類別的說明：
+    PhysX 光達對**碰撞體** raycast，骨架動畫角色沒有碰撞體照不到。
+    差別只在這個會動 —— USD 端額外套 RigidBodyAPI 並設為 kinematic，
+    位置由 run_isaac_sim 每個物理步依 obstacle_motion.position_at 更新。
+
+    ⚠ 為什麼不追求人體外形：policy 吃的是 72-bin sweep（每 bin 5°）且
+    前處理只保留地板上方 [0.93, 1.93] m 的水平帶。5 m 處的軀幹只佔約
+    1 個 bin，取 min-pool 後圓柱與人體網格的輸出完全相同。
+    """
+
+    name: str
+    #: map frame 的 (x, y) 路徑點，至少兩個才會動。
+    waypoints: tuple[tuple[float, float], ...] = ()
+    #: 疊在碰撞圓柱上的人物網格資產名（PEOPLE_ASSETS 的 key）。
+    #: None = 不套外殼，直接顯示圓柱。
+    visual_asset: str | None = "F_Business_02"
+    #: 行進速率 m/s。成人平均步行 1.2~1.4；推車或長者取 0.6~0.9。
+    speed: float = 1.2
+    #: 終點行為，見 obstacle_motion.MODES。
+    mode: str = "pingpong"
+    #: 起始時間偏移 s —— 讓多個行人不同相位，避免整齊劃一。
+    phase_s: float = 0.0
+    kind: str = "person"
+    radius: float = 0.25
+    height: float = 1.70
+    size_x: float = 0.6
+    size_y: float = 0.6
+
+
+#: NVIDIA People 角色資產（Isaac Sim 5.1 CDN）。這些是**純視覺**外殼：
+#: 骨架網格沒有碰撞體，PhysX 光達照不到，所以底下一定要墊碰撞代理。
+PEOPLE_ASSET_BASE = (
+    "https://omniverse-content-production.s3-us-west-2.amazonaws.com"
+    "/Assets/Isaac/5.1/Isaac/People/Characters"
+)
+PEOPLE_ASSETS: dict[str, str] = {
+    "F_Business_02": f"{PEOPLE_ASSET_BASE}/F_Business_02/F_Business_02.usd",
+    "F_Medical_01": f"{PEOPLE_ASSET_BASE}/F_Medical_01/F_Medical_01.usd",
+    "M_Medical_01": f"{PEOPLE_ASSET_BASE}/M_Medical_01/M_Medical_01.usd",
+}
+
+
+
+#: 預設行人。走廊中心線約 (0,+6) → (-10,+5) → (-17,+3.6)，寬約 2.9 m。
+#: 三種互動型態各一，對應論文的 crossing / head_on / same_direction 分類。
+DEFAULT_MOVING_OBSTACLES: tuple[MovingObstacle, ...] = (
+    # 橫穿：垂直切過走廊，車必須讓或繞。相位 0 → 車出發後最早遇到。
+    MovingObstacle(
+        "walker_cross",
+        waypoints=((-5.0, 4.3), (-5.0, 6.6)),
+        speed=1.2, mode="pingpong", phase_s=0.0, visual_asset="F_Business_02",
+    ),
+    # 迎面：沿走廊往東走向出發點，與車對向。錯開相位避免同步。
+    MovingObstacle(
+        "walker_headon",
+        waypoints=((-13.0, 5.6), (-2.5, 5.9)),
+        speed=1.1, mode="pingpong", phase_s=3.0, visual_asset="M_Medical_01",
+    ),
+    # 同向較慢：車從後方接近，需要超車或跟隨。
+    MovingObstacle(
+        "walker_slow",
+        waypoints=((-6.5, 4.8), (-14.5, 4.4)),
+        speed=0.6, mode="pingpong", phase_s=1.5, visual_asset="F_Medical_01",
+    ),
 )
 
 

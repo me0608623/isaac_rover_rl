@@ -45,6 +45,11 @@ def main() -> int:
                          "-1(預設)=headless 時自動用 0、GUI 時用 1。"
                          "PhysX Lidar 走物理 raycast 不需渲染，headless 下渲染是純浪費，"
                          "而且正好會去跟其他 GPU 工作搶資源。")
+    ap.add_argument("--no-character-colliders", dest="character_colliders",
+                    action="store_false",
+                    help="不替 People 角色套碰撞體（角色就只是看得到、打不到）")
+    ap.add_argument("--no-pedestrians", action="store_true",
+                    help="不驅動移動行人（做定位基準或需要完全靜態場景時用）")
     args = ap.parse_args()
 
     if not args.usd.exists():
@@ -108,6 +113,42 @@ def main() -> int:
         print(f"[run_isaac_sim] {tag}: " + "  ".join(out), flush=True)
 
     _dump_poses("play 之前")
+
+    # People 角色：執行期套三角網格碰撞體，PhysX 光達才打得到人體輪廓。
+    # 必須在這裡做 —— 角色網格在 CDN 參照底下，離線 usd-core 看不到。
+    if args.character_colliders:
+        import sys as _s0
+        _s0.path.insert(0, str(Path(__file__).resolve().parent))
+        from character_colliders import apply_mesh_colliders
+        from pxr import UsdGeom as _UG
+        _st = omni.usd.get_context().get_stage()
+        _rb = _st.GetPrimAtPath(
+            "/World/charger_rover4_5_0/charger_rover_urdf5/base_footprint")
+        _rxy = None
+        if _rb and _rb.IsValid():
+            _t = _UG.XformCache().GetLocalToWorldTransform(_rb).ExtractTranslation()
+            _rxy = (_t[0], _t[1])
+        n_c, n_m, skipped = apply_mesh_colliders(_st, "/World/Characters", _rxy)
+        print(f"[run_isaac_sim] 角色三角網格碰撞體：{n_c} 人 / {n_m} 個 mesh"
+              + (f"　跳過(太靠近車) {skipped}" if skipped else ""))
+
+    # 移動行人：kinematic rigid body，位姿每個物理步由我們覆寫。
+    driver = None
+    if not args.no_pedestrians:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import ros_graph_spec as _S
+        from build_ros_graph import MOVING_ROOT, measure_corridor_floor_top
+        from obstacle_driver import MovingObstacleDriver
+
+        stage = omni.usd.get_context().get_stage()
+        driver = MovingObstacleDriver(
+            stage, _S.DEFAULT_MOVING_OBSTACLES,
+            measure_corridor_floor_top(stage), MOVING_ROOT,
+        )
+        print(f"[run_isaac_sim] 移動行人 {len(driver)} 名"
+              + ("" if len(driver) else "  ⚠ USD 裡沒有行人 prim，請重跑 build_ros_graph.py"))
+
     print(f"[run_isaac_sim] 開始模擬  physics={args.physics_hz} Hz  render={args.render_hz} Hz")
 
     render_every = args.render_every
@@ -124,8 +165,11 @@ def main() -> int:
     steps = 0
     t_start = time.perf_counter()
     t_report = t_start
+    sim_report = sim.current_time
     try:
         while app.is_running():
+            if driver is not None:
+                driver.update(sim.current_time)
             do_render = render_every > 0 and steps % render_every == 0
             sim.step(render=do_render)
             steps += 1
@@ -140,8 +184,12 @@ def main() -> int:
                 _dump_poses(f"step {steps}")
             if steps % int(args.physics_hz) == 0:
                 now = time.perf_counter()
-                rtf = args.physics_hz / (now - t_report) if now > t_report else 0.0
-                t_report = now
+                # ⚠ 即時比 = 模擬時間前進量 / 牆鐘前進量。不能用 physics_hz/牆鐘 ——
+                #   rendering_dt(1/30) 比 physics_dt(1/60) 大時，sim.step() 實際
+                #   前進的是 rendering_dt，用步數換算會高估 60 倍（2026-09-21 誤導過）。
+                rtf = ((sim.current_time - sim_report) / (now - t_report)
+                       if now > t_report else 0.0)
+                t_report, sim_report = now, sim.current_time
                 print(f"[run_isaac_sim] sim_time={sim.current_time:8.2f} s  "
                       f"steps={steps}  RTF={rtf:.2f}x", flush=True)
             if args.seconds > 0 and sim.current_time >= args.seconds:
