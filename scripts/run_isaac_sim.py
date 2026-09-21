@@ -50,6 +50,11 @@ def main() -> int:
                     help="People 角色的光達可見性："
                          "parts=逐部位碰撞體（跟著骨架動畫擺動，預設）；"
                          "whole=整具一塊（凍結在 T-pose）；off=不套（看得到打不到）")
+    ap.add_argument("--colliders-for", choices=("walkers", "all"), default="walkers",
+                    help="哪些角色要有碰撞體。walkers(預設)=只給會走路的；"
+                         "all=全部 19 人。⚠ 給全部會讓 NDT 掃描裡出現大量地圖上"
+                         "沒有的結構（實測即時點雲與地圖重疊率 100%%→48.7%%），"
+                         "NDT 匹配不收斂而漂移（map→odom z 飄到 -1.95 m、roll -6.3°）。")
     ap.add_argument("--part-approx", choices=("convexHull", "none"),
                     default="convexHull",
                     help="部位碰撞體的近似。convexHull(預設)便宜且逐部位後幾乎不損"
@@ -267,6 +272,18 @@ def main() -> int:
                 _ok.append(str(_c.GetPath()))
                 _walks.append((_c.GetName(),
                                [(_t[0], _t[1] + 4.0), (_t[0], _t[1] - 4.0)]))
+
+        # ⚠ 站著不動的角色對導航測試毫無貢獻，卻會在 NDT 的掃描裡塞進大量
+        #   地圖上不存在的結構 —— 實測即時點雲與地圖的重疊率從 100% 掉到
+        #   48.7%，NDT 匹配不收斂，map→odom 飄到 z=-1.95 m、roll=-6.3°。
+        #   預設只給「會走路的角色」碰撞體。
+        import ros_graph_spec as _S1
+        _walk_names = {w.name for w in _S1.DEFAULT_CHARACTER_WALKS}
+        if args.colliders_for == "walkers":
+            _all_ok = list(_ok)
+            _ok = [p for p in _ok if p.rsplit("/", 1)[-1] in _walk_names]
+            print(f"[run_isaac_sim] 碰撞體只給會走的角色：{len(_ok)} / {len(_all_ok)} 人"
+                  f"（站著的不給，避免污染 NDT）")
 
         # anim_people 路線需要 GoTo 命令與 Stop→Play，否則只站著播 idle。
         # 預設的 procedural 路線不走這裡（自己把步態寫進骨架）。

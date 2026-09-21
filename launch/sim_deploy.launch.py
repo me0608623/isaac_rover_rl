@@ -98,6 +98,11 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("enable_ndt", default_value="true"),
         DeclareLaunchArgument("enable_routing", default_value="true"),
         DeclareLaunchArgument("enable_policy", default_value="true"),
+        DeclareLaunchArgument(
+            "enable_vo", default_value="true",
+            help="插入車端的 vo_safety_node（前方 LiDAR 安全煞）。"
+                 "true(預設)=對應實車：policy→/rover_rl/cmd_vel_desired→vo_safety→/cmd_vel；"
+                 "false=純 RL policy 直接發 /cmd_vel（測 policy 本身用）。"),
         DeclareLaunchArgument("enable_rviz", default_value="true"),
         # 預設用 .62 帶過來的那份（車端實際在用、分類完整）。
         # sim_deploy_minimal.rviz 是精簡版備援。
@@ -257,8 +262,12 @@ def generate_launch_description() -> LaunchDescription:
             # 缺了會 [FAIL] action_fixture_present 並在 manifest_strict 下直接退出）
             "manifest_fixture_path": str(ROVER_RL / "docs" / "freeze" / "sa1_action_contract_v1.json"),
             # 實車走 lcr_cmd_vel_mux（/input/nav_cmd_vel → /cmd_vel）以避免 joy/nav 互搶。
-            # 模擬沒有其他 cmd_vel 來源，直接發給 Isaac 的 ROS2SubscribeTwist。
-            "topic_cmd_vel": "/cmd_vel",
+            # 模擬沒有其他 cmd_vel 來源。
+            #   enable_vo=false → policy 直接發 /cmd_vel 給 Isaac 的 ROS2SubscribeTwist
+            #   enable_vo=true  → 改道 /rover_rl/cmd_vel_desired，由 vo_safety_node 接手
+            #                     （與車端 deploy_full.launch.py:401 相同做法）
+            "topic_cmd_vel": ("/rover_rl/cmd_vel_desired"
+                              if _vo_enabled(context) else "/cmd_vel"),
             # 83D 系列的 yaml 預設 initial_mode="idle"（實車首次上電待命，人確認後才切 nav）。
             # 模擬沒有人在旁邊按確認，直接起 nav。
             "initial_mode": LaunchConfiguration("initial_mode").perform(context),
@@ -284,13 +293,53 @@ def generate_launch_description() -> LaunchDescription:
 
     rl_nodes = OpaqueFunction(function=_rl_nodes)
 
+    def _vo_safety(context):
+        """車端的前方 LiDAR 安全煞。與實車同一支節點、同一份 vo_params.yaml。
+
+        鏈路（對齊車端 deploy_full.launch.py）：
+            policy → /rover_rl/cmd_vel_desired → vo_safety_node → /cmd_vel
+
+        車端輸出是 /input/nav_cmd_vel 再經 lcr_cmd_vel_mux 到 /cmd_vel；
+        模擬沒有其他 cmd_vel 來源，所以直接輸出到 /cmd_vel。
+
+        ⚠ 模擬沒有 LV-DOT，所以 /vo_interface/tracked_obstacles 不會有資料，
+        VO 的幾何式動態避障那一層等於沒作用。但**前方安全煞仍然有效** ——
+        它吃 /rover_rl/lidar_sweep_72 還原 front/left/right_m（見 vo_safety_node
+        的「前方扇區備援來源」註解），與有沒有 VO track 無關。
+
+        車端實際生效的門檻（vo_params.yaml）：
+            front_brake_slow_m 0.8 → 線性減速
+            front_brake_stop_m 0.7 → 禁止前進
+            front_hardstop_m   0.6 → 硬停
+            front_brake_emergency_m 0.55 → 絕對底線
+        """
+        if not _vo_enabled(context):
+            return []
+        vo_yaml = RL_CFG / "vo_params.yaml"
+        if not vo_yaml.exists():
+            print(f"[sim_deploy] ⚠ 找不到 {vo_yaml}，略過 vo_safety_node")
+            return []
+        print(f"[sim_deploy] VO 安全層啟用：{vo_yaml.name}"
+              f"（policy → /rover_rl/cmd_vel_desired → vo_safety → /cmd_vel）")
+        return [Node(
+            package="rover_rl_inference", executable="vo_safety",
+            name="vo_safety_node", output="screen",
+            parameters=[str(vo_yaml), {
+                "topic_cmd_in": "/rover_rl/cmd_vel_desired",
+                "topic_cmd_out": "/cmd_vel",     # 模擬無 mux
+                "use_sim_time": True,
+            }],
+            additional_env=_rl_env())]
+
+    vo_safety = OpaqueFunction(function=_vo_safety)
+
     rviz = Node(package="rviz2", executable="rviz2", name="rviz_sim", output="log",
                 arguments=["-d", [str(SIM_WS / "rviz") + "/", LaunchConfiguration("rviz_config")]],
                 parameters=[{"use_sim_time": True}],
                 condition=IfCondition(LaunchConfiguration("enable_rviz")))
 
     return LaunchDescription([
-        *args, robot_state_publisher, drift, smear,
+        *args, robot_state_publisher, drift, smear, vo_safety,
         world_to_map, ndt, downsample, map_loader, init_pose,
         map_server, routing_engine, mapinfo, routes_viz, routing_to_path, routing_click,
         rl_nodes, rviz,
