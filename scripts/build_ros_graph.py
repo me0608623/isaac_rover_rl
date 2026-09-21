@@ -74,6 +74,7 @@ CLOCK_GRAPH = "/World/ROS_Clock"
 #: 模擬加入的走廊障礙物放這裡（與場景原有幾何分開，好辨識與刪除）。
 OBSTACLE_ROOT = "/World/SimObstacles"
 CHARACTER_ROOT = "/World/Characters"
+MAP_PATCH_PATH = "/World/MapPatch"
 
 #: TF 停用的雙保險：導到沒人訂閱的 topic。
 DEAD_TF_TOPIC = "/isaac_tf_disabled"
@@ -625,6 +626,85 @@ def add_clock_publisher(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Change]:
 
 
 
+def place_map_patch(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Change]:
+    """把「地圖有、USD 沒有」的天花板結構補回場景（隱形碰撞體）。
+
+    走廊是兩道平行長牆；牆面光禿禿就沒有**沿走廊方向**的特徵 —— 前進一
+    公尺與原地不動看起來幾乎一樣，NDT 估不出縱向位移（孔徑問題）。實測
+    導航失敗時「車走了 4.7 m，NDT 只認為移動 0.5 m」正是這個徵狀。
+
+    實測走廊段有 25.5% 的地圖結構 USD 完全沒有，96% 集中在 1.3~2.3 m。
+
+    幾何直接從 NDT 地圖體素化而來（見 map_patch 模組的說明與限制）。
+
+    ⚠ 設成 **invisible**：``visibility`` 是純渲染屬性，PhysX 的碰撞查詢走
+    另一條路徑，所以光達照樣打得到。這樣 Isaac GUI 與 RViz 都不會被天花板
+    的方塊擋住視線（RViz 的**即時點雲**仍會出現打到它們的回波 —— 那是應該
+    的，真實世界那裡確實有東西）。
+
+    ⚠ 靜態碰撞體（不加 RigidBodyAPI）：這些結構不會動，而且 kinematic 剛體
+    是無限質量，萬一與車重疊會把車彈飛（見 character_colliders 的教訓）。
+    """
+    if not spec.map_patch:
+        return []
+    import numpy as np
+    from pxr import UsdPhysics, Vt
+
+    from compare_map_vs_usd import read_pcd, sample_usd_surfaces, world_to_map
+    from map_patch import (CEILING_BAND, MISSING_TOL_M, VOXEL_M, boxes_to_mesh,
+                           voxel_centers, voxelize_missing)
+
+    pcd = Path(spec.map_patch_pcd)
+    if not pcd.exists():
+        print(f"[build] ⚠ 找不到地圖 {pcd}，略過補丁")
+        return []
+
+    M = read_pcd(pcd)
+    U = sample_usd_surfaces(str(spec.map_patch_source_usd), "/World/Env_0", 600000)
+    Umap = np.column_stack([world_to_map(U[:, :2]),
+                            U[:, 2] + S.WORLD_TO_MAP_Z_OFFSET])
+
+    x0, x1, y0, y1 = spec.map_patch_bounds
+    zl, zh = CEILING_BAND
+
+    def crop(P):
+        m = ((P[:, 0] > x0) & (P[:, 0] < x1) & (P[:, 1] > y0) & (P[:, 1] < y1)
+             & (P[:, 2] >= zl) & (P[:, 2] < zh))
+        return P[m]
+
+    cells = voxelize_missing(crop(M), crop(Umap), VOXEL_M, MISSING_TOL_M)
+    if len(cells) == 0:
+        return []
+    centers_map = voxel_centers(cells, VOXEL_M)
+
+    # map → world（反向變換）：先扣平移、再轉 -yaw
+    yaw = S.WORLD_TO_MAP_YAW_RAD
+    tx, ty = S.WORLD_TO_MAP_TRANSLATION
+    c_, s_ = math.cos(yaw), math.sin(yaw)
+    dx, dy = centers_map[:, 0] - tx, centers_map[:, 1] - ty
+    centers_world = np.column_stack([
+        dx * c_ + dy * s_,
+        -dx * s_ + dy * c_,
+        centers_map[:, 2] - S.WORLD_TO_MAP_Z_OFFSET,
+    ])
+
+    pts, counts, idx = boxes_to_mesh(centers_world, VOXEL_M)
+    mesh = UsdGeom.Mesh.Define(stage, MAP_PATCH_PATH)
+    mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in pts]))
+    mesh.CreateFaceVertexCountsAttr(Vt.IntArray(counts))
+    mesh.CreateFaceVertexIndicesAttr(Vt.IntArray(idx))
+    a = np.array(pts)
+    mesh.CreateExtentAttr([tuple(a.min(axis=0)), tuple(a.max(axis=0))])
+    UsdGeom.Imageable(mesh.GetPrim()).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+    UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
+    mc = UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim())
+    mc.CreateApproximationAttr().Set("none")      # 靜態三角網格，BVH 查詢
+
+    return [Change(MAP_PATCH_PATH, "地圖補丁（天花板層）", None,
+                   f"{len(cells)} 方塊 / {len(counts)} 三角面  "
+                   f"體素 {VOXEL_M} m  z∈[{zl},{zh})  隱形＋靜態碰撞體")]
+
+
 STEPS = (
     ("停用 Isaac 的 TF 發佈（方案 A）", disable_isaac_tf_publishers),
     ("odom topic 改 /odom_gt 讓 injector 插入", retarget_odometry_topic),
@@ -637,6 +717,7 @@ STEPS = (
     ("NavFloor 抬高對齊走廊地板", align_navmesh_floor_to_corridor),
     ("停用無資料的 2D 光達", disable_broken_2d_lidars),
     ("走廊障礙物", place_corridor_obstacles),
+    ("地圖補丁（天花板層）", place_map_patch),
     ("新增 /clock 發佈", add_clock_publisher),
     ("機器人生成於 routing 站 c28（JSON 站表）", spawn_robot_at_routing_node),
 )
@@ -676,6 +757,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--obstacles", action="store_true",
                     help="在走廊放帶碰撞體的障礙物（人體圓柱代理＋推車方箱）。"
                          "不帶此旗標＝淨空走廊，做定位基準時用。")
+    ap.add_argument("--map-patch", action="store_true",
+                    help="把「地圖有、USD 沒有」的天花板結構補成隱形碰撞體，"
+                         "給 NDT 提供沿走廊方向的特徵（解孔徑問題）。")
     ap.add_argument("--output", type=Path,
                     default=Path(__file__).resolve().parents[1] / "assets" / "3floor_ver_1_ros_fixed.usda")
     args = ap.parse_args(argv)
@@ -687,6 +771,8 @@ def main(argv: list[str] | None = None) -> int:
     spec = S.SimRosSpec().with_tf_ownership(S.default_tf_ownership())
     if args.obstacles:
         spec = replace(spec, obstacles=S.DEFAULT_OBSTACLES)
+    if args.map_patch:
+        spec = replace(spec, map_patch=True)
     report = build(args.input, args.output, spec)
 
     total = 0

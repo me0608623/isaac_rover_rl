@@ -244,6 +244,12 @@ class SimRosSpec:
     enable_2d_lidars: bool = False
     #: 走廊障礙物。空 tuple = 淨空走廊（做定位基準時用）。
     obstacles: tuple = ()
+    #: 是否補「地圖有、USD 沒有」的天花板結構（隱形碰撞體，給 NDT 用）。
+    map_patch: bool = False
+    map_patch_pcd: str = "src/ndt_localizer/map/3F_314.pcd"
+    map_patch_source_usd: str = "/home/aa/Ros/charge_rl/assets/3F/3floor_ver_1.usd"
+    #: 補丁範圍 (x0, x1, y0, y1)，map frame。預設涵蓋 c28↔c25 的走廊段。
+    map_patch_bounds: tuple = (-20.0, 4.0, 1.5, 9.5)
 
     @property
     def isaac_point_cloud_topic(self) -> str:

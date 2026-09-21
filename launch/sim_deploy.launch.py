@@ -116,9 +116,18 @@ def generate_launch_description() -> LaunchDescription:
                               description="點雲掃描運動拖影（NDT 主要誤差源）"),
         DeclareLaunchArgument("enable_drift", default_value="true",
                               description="odom 漂移注入"),
-        DeclareLaunchArgument("ndt_crop_min_z", default_value="-1.2",
+        # ⚠ 2026-09-21 從 -1.2 改回車端值 -2.0。對照實驗（車靜止 60 s）：
+        #       crop      無角色    5 角色
+        #       -1.2      1.65°     1.89°
+        #       -2.0      1.05°     1.12°     ← 傾角降 0.6~0.8°
+        #   地板回波實測散在 sensor frame z∈[-1.56,-1.25]（佔掃描 9.7%），
+        #   -1.2 會把地板 100% 切光 —— 而地板是 roll/pitch 的主要約束。
+        #   -1.2 原是為了壓 NavFloor 假平面造成的傾斜而設，NavFloor 後來已
+        #   對齊走廊地板，該補丁遂成過期且有害。
+        DeclareLaunchArgument("ndt_crop_min_z", default_value="-2.0",
                               description="NDT 輸入點雲的 z 下限（感測器座標系）。"
-                                          "車端預設 -2.0（含地板）；模擬用 -1.2 切掉地板。"),
+                                          "-2.0 = 車端值，含地板（預設）；"
+                                          "-1.2 = 切掉地板，只為重現 2026-09-21 之前的行為。"),
         DeclareLaunchArgument("spawn_node", default_value="c28",
                               description="NDT 初始猜測要用哪個 routing 節點"),
         # ⚠ checkpoint 與其配套 yaml 必須**整組**切換 —— 這些模型的觀測契約不同
