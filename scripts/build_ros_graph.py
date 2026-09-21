@@ -73,7 +73,6 @@ CLOCK_GRAPH = "/World/ROS_Clock"
 
 #: 模擬加入的走廊障礙物放這裡（與場景原有幾何分開，好辨識與刪除）。
 OBSTACLE_ROOT = "/World/SimObstacles"
-MOVING_ROOT = "/World/SimMovingObstacles"
 CHARACTER_ROOT = "/World/Characters"
 
 #: TF 停用的雙保險：導到沒人訂閱的 topic。
@@ -623,94 +622,6 @@ def add_clock_publisher(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Change]:
 # 組裝
 # --------------------------------------------------------------------------
 
-def place_moving_obstacles(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Change]:
-    """建立會移動的行人代理（kinematic rigid body）。
-
-    與靜態障礙物的唯一差別是多套一個 ``RigidBodyAPI`` 並設 kinematic：
-
-    - 只有 ``CollisionAPI`` 的靜態碰撞體，每幀改 transform 會逼 PhysX 重建
-      靜態場景的空間結構，既慢又不保證 raycast 讀到新位置。
-    - kinematic rigid body 是「由外部指定位姿、不受力」的剛體，PhysX 每步
-      會正確更新它的碰撞體位置，光達 raycast 因此打得到移動中的它。
-
-    位姿由 run_isaac_sim 每個物理步依 obstacle_motion.position_at 寫入；
-    這裡只負責把 prim 與物理屬性建好，並擺到路徑起點。
-    """
-    if not spec.moving_obstacles:
-        return []
-    from pxr import UsdPhysics
-
-    floor_top = measure_corridor_floor_top(stage)
-    if not stage.GetPrimAtPath(MOVING_ROOT).IsValid():
-        UsdGeom.Xform.Define(stage, MOVING_ROOT)
-
-    changes: list[Change] = []
-    for m in spec.moving_obstacles:
-        path = f"{MOVING_ROOT}/{m.name}"
-        if stage.GetPrimAtPath(path).IsValid():
-            continue
-        start = m.waypoints[0] if m.waypoints else (0.0, 0.0)
-        wx, wy, _ = S.map_to_world(start[0], start[1], 0.0)
-        cz = floor_top + m.height / 2.0
-
-        if m.kind == "person":
-            g = UsdGeom.Cylinder.Define(stage, path)
-            g.CreateRadiusAttr(float(m.radius))
-            g.CreateHeightAttr(float(m.height))
-            g.CreateAxisAttr("Z")
-            g.CreateExtentAttr([(-m.radius, -m.radius, -m.height / 2),
-                                (m.radius, m.radius, m.height / 2)])
-            scale = Gf.Vec3d(1.0, 1.0, 1.0)
-            desc = f"圓柱 r={m.radius} h={m.height}"
-        else:
-            g = UsdGeom.Cube.Define(stage, path)
-            g.CreateSizeAttr(1.0)
-            g.CreateExtentAttr([(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)])
-            scale = Gf.Vec3d(float(m.size_x), float(m.size_y), float(m.height))
-            desc = f"方箱 {m.size_x}x{m.size_y}x{m.height}"
-
-        # 同 place_corridor_obstacles：單一矩陣，不要 AddScaleOp + AddTranslateOp。
-        mat = Gf.Matrix4d(1.0)
-        mat.SetScale(scale)
-        mat = mat * Gf.Matrix4d(1.0).SetTranslate(Gf.Vec3d(wx, wy, cz))
-        g.MakeMatrixXform().Set(mat)
-
-        UsdPhysics.CollisionAPI.Apply(g.GetPrim())
-        body = UsdPhysics.RigidBodyAPI.Apply(g.GetPrim())
-        body.CreateKinematicEnabledAttr(True)
-
-        # 視覺外殼：看到的是人形網格，量到的是圓柱。
-        # visibility 是純渲染屬性，不影響 PhysX 碰撞體，所以把圓柱藏起來
-        # 之後光達照樣打得到（有 test_collider_cylinder_is_hidden_but_still_collides
-        # 與光達實測兩層把關）。
-        asset = S.PEOPLE_ASSETS.get(m.visual_asset) if m.visual_asset else None
-        if asset:
-            UsdGeom.Imageable(g.GetPrim()).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
-            shell = UsdGeom.Xform.Define(stage, f"{path}/visual")
-            shell.GetPrim().GetReferences().AddReference(asset)
-            # ⚠ 圓柱原點在中心、人物網格原點在腳底 → 外殼要往下挪半個身高，
-            #   否則整個人會浮在半空。
-            shell.MakeMatrixXform().Set(
-                Gf.Matrix4d(1.0).SetTranslate(Gf.Vec3d(0.0, 0.0, -m.height / 2.0)))
-            desc += " + 人形外殼"
-
-        length = _polyline_length(m.waypoints)
-        changes.append(Change(
-            path,
-            f"行人 {m.name} @ map{start}",
-            None,
-            f"World({wx:.3f},{wy:.3f},{cz:.3f}) {desc} "
-            f"路徑{length:.2f}m {m.speed}m/s {m.mode}",
-        ))
-    return changes
-
-
-def _polyline_length(waypoints) -> float:
-    """折線長度。與 obstacle_motion.path_length 同義，避免 USD 端反向依賴。"""
-    if len(waypoints) < 2:
-        return 0.0
-    return sum(math.hypot(b[0] - a[0], b[1] - a[1])
-               for a, b in zip(waypoints, waypoints[1:]))
 
 
 
@@ -726,7 +637,6 @@ STEPS = (
     ("NavFloor 抬高對齊走廊地板", align_navmesh_floor_to_corridor),
     ("停用無資料的 2D 光達", disable_broken_2d_lidars),
     ("走廊障礙物", place_corridor_obstacles),
-    ("移動行人", place_moving_obstacles),
     ("新增 /clock 發佈", add_clock_publisher),
     ("機器人生成於 routing 站 c28（JSON 站表）", spawn_robot_at_routing_node),
 )
@@ -766,9 +676,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--obstacles", action="store_true",
                     help="在走廊放帶碰撞體的障礙物（人體圓柱代理＋推車方箱）。"
                          "不帶此旗標＝淨空走廊，做定位基準時用。")
-    ap.add_argument("--pedestrians", action="store_true",
-                    help="加入沿折線往返的移動行人（kinematic 圓柱代理）。"
-                         "位姿由 run_isaac_sim 每個物理步更新。")
     ap.add_argument("--output", type=Path,
                     default=Path(__file__).resolve().parents[1] / "assets" / "3floor_ver_1_ros_fixed.usda")
     args = ap.parse_args(argv)
@@ -780,8 +687,6 @@ def main(argv: list[str] | None = None) -> int:
     spec = S.SimRosSpec().with_tf_ownership(S.default_tf_ownership())
     if args.obstacles:
         spec = replace(spec, obstacles=S.DEFAULT_OBSTACLES)
-    if args.pedestrians:
-        spec = replace(spec, moving_obstacles=S.DEFAULT_MOVING_OBSTACLES)
     report = build(args.input, args.output, spec)
 
     total = 0

@@ -63,8 +63,6 @@ def main() -> int:
                          "procedural=自寫步態寫進骨架（確定性、headless 可靠，預設）；"
                          "anim_people=omni.anim.people 行為腳本（headless 下實測起不來）；"
                          "off=不動")
-    ap.add_argument("--no-pedestrians", action="store_true",
-                    help="不驅動移動行人（做定位基準或需要完全靜態場景時用）")
     args = ap.parse_args()
 
     if not args.usd.exists():
@@ -141,13 +139,20 @@ def main() -> int:
     _part_track: dict = {"pts": []}
 
     def _track_part() -> None:
-        """每步記錄 L_forearm 世界位置 —— 兩點取樣會剛好撞上同相位而誤判。"""
+        """每步記錄 L_forearm **相對角色根節點**的位置。
+
+        ⚠ 用世界座標會被角色沿路徑的位移蓋過去（實測走 6 m 時「行程」變成
+        6.457 m，完全測不到擺動）。擺幅必須在角色自身的座標系裡量。
+        兩點取樣也不行 —— 會剛好撞上同相位而誤判為沒動。
+        """
         from pxr import UsdGeom
         import omni.usd as _ou
         st = _ou.get_context().get_stage()
+        cache = UsdGeom.XformCache()
+        ch = st.GetPrimAtPath("/World/Characters/Character_10")
         pr = st.GetPrimAtPath("/World/Characters/Character_10/lidar_parts/L_forearm")
-        if pr and pr.IsValid():
-            t = UsdGeom.XformCache().GetLocalToWorldTransform(pr).ExtractTranslation()
+        if ch and ch.IsValid() and pr and pr.IsValid():
+            t = cache.ComputeRelativeTransform(pr, ch)[0].ExtractTranslation()
             _part_track["pts"].append((t[0], t[1], t[2]))
 
     def _report_part_range(tag: str) -> None:
@@ -157,7 +162,7 @@ def main() -> int:
         import math as _m
         xs = [p[0] for p in pts]; ys = [p[1] for p in pts]; zs = [p[2] for p in pts]
         span = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
-        print(f"[debug-parts] {tag}: L_forearm 取樣 {len(pts)} 點  "
+        print(f"[debug-parts] {tag}: L_forearm(相對角色) 取樣 {len(pts)} 點  "
               f"行程 x={max(xs)-min(xs):.3f} y={max(ys)-min(ys):.3f} "
               f"z={max(zs)-min(zs):.3f} m  最大 {span:.3f} m", flush=True)
         _part_track["pts"] = []
@@ -284,33 +289,22 @@ def main() -> int:
             print(f"[run_isaac_sim] 整具碰撞體(T-pose)：{n_c} 人 / {n_m} mesh"
                   + (f"　跳過 {sk}" if sk else ""))
 
-    # 移動行人：kinematic rigid body，位姿每個物理步由我們覆寫。
-    driver = None
-    if not args.no_pedestrians:
-        import sys as _sys
-        _sys.path.insert(0, str(Path(__file__).resolve().parent))
-        import ros_graph_spec as _S
-        from build_ros_graph import MOVING_ROOT, measure_corridor_floor_top
-        from obstacle_driver import MovingObstacleDriver
-
-        stage = omni.usd.get_context().get_stage()
-        driver = MovingObstacleDriver(
-            stage, _S.DEFAULT_MOVING_OBSTACLES,
-            measure_corridor_floor_top(stage), MOVING_ROOT,
-        )
-        print(f"[run_isaac_sim] 移動行人 {len(driver)} 名"
-              + ("" if len(driver) else "  ⚠ USD 裡沒有行人 prim，請重跑 build_ros_graph.py"))
-
     if args.walk_mode == "anim_people":
         from anim_people import restart_for_behavior_scripts
         restart_for_behavior_scripts(sim, app)      # 漏掉這步角色站著不動
         print("[run_isaac_sim] Stop→Play 完成，行為腳本已初始化")
     walk_driver = None
     if args.walk_mode == "procedural" and args.character_mode != "off":
+        import ros_graph_spec as _S2
         from character_walk import CharacterWalkDriver
-        walk_driver = CharacterWalkDriver(omni.usd.get_context().get_stage(), _ok)
+        from build_ros_graph import measure_corridor_floor_top
+        _st2 = omni.usd.get_context().get_stage()
+        walk_driver = CharacterWalkDriver(
+            _st2, _ok, walks=_S2.DEFAULT_CHARACTER_WALKS,
+            floor_top=measure_corridor_floor_top(_st2))
         print(f"[run_isaac_sim] 程序化步態：{len(walk_driver)} 人 / "
-              f"{walk_driver.segments_driven()} 個擺動關節")
+              f"{walk_driver.segments_driven()} 個擺動關節 / "
+              f"{walk_driver.walking()} 人沿路徑移動")
     if args.character_mode == "parts":
         from character_parts import CharacterPartsDriver
         parts_driver = CharacterPartsDriver(omni.usd.get_context().get_stage(), _ok)
@@ -335,8 +329,6 @@ def main() -> int:
     sim_report = sim.current_time
     try:
         while app.is_running():
-            if driver is not None:
-                driver.update(sim.current_time)
             if walk_driver is not None:
                 walk_driver.update(sim.current_time)   # 先把步態寫進骨架
             if parts_driver is not None:

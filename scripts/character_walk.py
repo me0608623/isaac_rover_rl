@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 
+from character_path import character_pose_at, facing_rotation_deg
 from gait import GAIT_JOINTS, base_pose_angles, joint_angles, stride_phase
 from skel_parts import joint_to_segment
 
@@ -71,11 +72,13 @@ def _decompose(m):
 class CharacterWalkDriver:
     """每幀把步態寫進各角色的骨架。"""
 
-    def __init__(self, stage, char_paths, speeds=None):
+    def __init__(self, stage, char_paths, walks=None, floor_top: float = 0.0):
         from pxr import Gf, Sdf, UsdGeom, UsdSkel, Vt
 
         self._stage = stage
         self._chars = []
+        self._floor_top = floor_top
+        by_name = {w.name: w for w in (walks or ())}
         cache = UsdGeom.XformCache()
 
         for i, cp in enumerate(char_paths):
@@ -132,8 +135,15 @@ class CharacterWalkDriver:
                 root if (root and root.IsValid()) else skel_prim)
             binding.CreateAnimationSourceRel().SetTargets([Sdf.Path(anim_path)])
 
-            speed = (speeds[i] if speeds and i < len(speeds) else 1.2)
-            self._chars.append((anim, list(r0), targets, speed))
+            # ⚠ 只對「有路徑」的角色接管 transform：MakeMatrixXform() 會清掉
+            #   既有的 xform op stack，對站著不動的角色會把它重設成單位變換，
+            #   所有人就會擠到世界原點。
+            walk = by_name.get(char.GetName())
+            op = None
+            if walk is not None and walk.waypoints:
+                op = UsdGeom.Xformable(char).MakeMatrixXform()
+            speed = walk.speed if walk is not None else 0.0
+            self._chars.append((anim, list(r0), targets, speed, walk, op))
 
     def __len__(self) -> int:
         return len(self._chars)
@@ -141,12 +151,25 @@ class CharacterWalkDriver:
     def segments_driven(self) -> int:
         return sum(len(c[2]) for c in self._chars)
 
+    def walking(self) -> int:
+        """實際沿路徑移動的角色數（其餘站著，仍套基礎姿勢）。"""
+        return sum(1 for c in self._chars if c[5] is not None)
+
     def update(self, sim_time: float, phase_offset_per_char: float = 0.7) -> None:
         from pxr import Gf, Vt
 
         base = base_pose_angles()
-        for k, (anim, rest_rot, targets, speed) in enumerate(self._chars):
-            phase = stride_phase(sim_time + k * phase_offset_per_char, speed)
+        for k, (anim, rest_rot, targets, speed, walk, op) in enumerate(self._chars):
+            # 沿路徑移動：角色原點在腳底，z 直接取地板高度。
+            if op is not None:
+                wx, wy, wz, wyaw = character_pose_at(walk, sim_time, self._floor_top)
+                m = Gf.Matrix4d(1.0).SetRotate(
+                    Gf.Rotation(Gf.Vec3d(0, 0, 1), facing_rotation_deg(wyaw)))
+                m = m * Gf.Matrix4d(1.0).SetTranslate(Gf.Vec3d(wx, wy, wz))
+                op.Set(m)
+
+            offset = walk.phase_s if walk is not None else k * phase_offset_per_char
+            phase = stride_phase(sim_time + offset, speed)
             ang = joint_angles(phase, speed)
             rot = list(rest_rot)
             for seg, (ji, prot) in targets.items():

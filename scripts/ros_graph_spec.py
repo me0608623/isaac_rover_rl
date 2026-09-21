@@ -244,8 +244,6 @@ class SimRosSpec:
     enable_2d_lidars: bool = False
     #: 走廊障礙物。空 tuple = 淨空走廊（做定位基準時用）。
     obstacles: tuple = ()
-    #: 移動障礙物（行人）。空 tuple = 只有靜態障礙。
-    moving_obstacles: tuple = ()
 
     @property
     def isaac_point_cloud_topic(self) -> str:
@@ -421,38 +419,6 @@ DEFAULT_OBSTACLES: tuple[Obstacle, ...] = (
 )
 
 
-@dataclass(frozen=True)
-class MovingObstacle:
-    """沿折線等速往返的動態障礙物（行人／推車）。
-
-    與 :class:`Obstacle` 同樣用帶碰撞體的幾何代理，理由見該類別的說明：
-    PhysX 光達對**碰撞體** raycast，骨架動畫角色沒有碰撞體照不到。
-    差別只在這個會動 —— USD 端額外套 RigidBodyAPI 並設為 kinematic，
-    位置由 run_isaac_sim 每個物理步依 obstacle_motion.position_at 更新。
-
-    ⚠ 為什麼不追求人體外形：policy 吃的是 72-bin sweep（每 bin 5°）且
-    前處理只保留地板上方 [0.93, 1.93] m 的水平帶。5 m 處的軀幹只佔約
-    1 個 bin，取 min-pool 後圓柱與人體網格的輸出完全相同。
-    """
-
-    name: str
-    #: map frame 的 (x, y) 路徑點，至少兩個才會動。
-    waypoints: tuple[tuple[float, float], ...] = ()
-    #: 疊在碰撞圓柱上的人物網格資產名（PEOPLE_ASSETS 的 key）。
-    #: None = 不套外殼，直接顯示圓柱。
-    visual_asset: str | None = "F_Business_02"
-    #: 行進速率 m/s。成人平均步行 1.2~1.4；推車或長者取 0.6~0.9。
-    speed: float = 1.2
-    #: 終點行為，見 obstacle_motion.MODES。
-    mode: str = "pingpong"
-    #: 起始時間偏移 s —— 讓多個行人不同相位，避免整齊劃一。
-    phase_s: float = 0.0
-    kind: str = "person"
-    radius: float = 0.25
-    height: float = 1.70
-    size_x: float = 0.6
-    size_y: float = 0.6
-
 
 #: NVIDIA People 角色資產（Isaac Sim 5.1 CDN）。這些是**純視覺**外殼：
 #: 骨架網格沒有碰撞體，PhysX 光達照不到，所以底下一定要墊碰撞代理。
@@ -468,27 +434,49 @@ PEOPLE_ASSETS: dict[str, str] = {
 
 
 
-#: 預設行人。走廊中心線約 (0,+6) → (-10,+5) → (-17,+3.6)，寬約 2.9 m。
-#: 三種互動型態各一，對應論文的 crossing / head_on / same_direction 分類。
-DEFAULT_MOVING_OBSTACLES: tuple[MovingObstacle, ...] = (
-    # 橫穿：垂直切過走廊，車必須讓或繞。相位 0 → 車出發後最早遇到。
-    MovingObstacle(
-        "walker_cross",
-        waypoints=((-5.0, 4.3), (-5.0, 6.6)),
-        speed=1.2, mode="pingpong", phase_s=0.0, visual_asset="F_Business_02",
-    ),
-    # 迎面：沿走廊往東走向出發點，與車對向。錯開相位避免同步。
-    MovingObstacle(
-        "walker_headon",
-        waypoints=((-13.0, 5.6), (-2.5, 5.9)),
-        speed=1.1, mode="pingpong", phase_s=3.0, visual_asset="M_Medical_01",
-    ),
-    # 同向較慢：車從後方接近，需要超車或跟隨。
-    MovingObstacle(
-        "walker_slow",
-        waypoints=((-6.5, 4.8), (-14.5, 4.4)),
-        speed=0.6, mode="pingpong", phase_s=1.5, visual_asset="F_Medical_01",
-    ),
+
+#: 角色的靜止朝向（度）。實測自解剖特徵：L_Foot→L_ToeBase 方向
+#: (+0.03, -0.96, -0.27) 代表腳趾指向 **-Y**，右肩→左肩為 +X。
+#: 交叉驗證：forward × left = (-Y)×(+X) = +Z = up ✓
+#: 弄反的話角色會倒著走。
+CHARACTER_REST_FACING_DEG = -90.0
+
+
+@dataclass(frozen=True)
+class CharacterWalk:
+    """一個 People 角色沿折線行走的設定（map frame）。
+
+    與已移除的圓柱 walker 不同，這裡移動的是**真正的角色**：四肢由程序化
+    步態驅動、碰撞體是逐部位的真實人形，所以光達掃到的是走路中的人。
+
+    ⚠ 角色的原點在**腳底**，不像圓柱在中心 —— 擺位時 z 直接取地板高度。
+    """
+
+    name: str
+    #: map frame 的 (x, y) 路徑點。空 tuple = 站著不動（仍會套基礎姿勢）。
+    waypoints: tuple[tuple[float, float], ...] = ()
+    speed: float = 1.2
+    mode: str = "pingpong"
+    #: 起始時間偏移 s，讓多個角色不同相位。
+    phase_s: float = 0.0
+
+
+#: 預設行走路線。走廊中心線約 (0,+6) → (-10,+5) → (-17,+3.6)。
+#:
+#: ⚠ 所有靜態障礙物都在 y ≥ 5.3，所以下半條車道（y ≈ 3.2~4.7）是淨空的，
+#: 沿走廊行走的角色走那裡；橫穿路線則挑障礙物之間的空隙。有測試檢查
+#: 每個路徑點與靜態障礙物至少相距 0.8 m。
+DEFAULT_CHARACTER_WALKS: tuple[CharacterWalk, ...] = (
+    # 迎面：沿走廊走向機器人出發點
+    CharacterWalk("Character_10", ((-12.0, 4.3), (-3.5, 4.7)), speed=1.1, phase_s=0.0),
+    # 同向較慢：車從後方接近，需要超車或跟隨
+    CharacterWalk("Character_11", ((-15.0, 3.7), (-8.0, 4.0)), speed=0.7, phase_s=2.0),
+    # 橫穿：在 person_b(-6) 與 person_c(-9.5) 之間切過走廊
+    CharacterWalk("Character_19", ((-7.8, 3.5), (-7.8, 6.6)), speed=1.2, phase_s=1.0),
+    # 橫穿：走廊深處
+    CharacterWalk("Character_12", ((-13.0, 3.2), (-13.0, 5.4)), speed=1.0, phase_s=3.5),
+    # 沿走廊，最深處
+    CharacterWalk("Character_13", ((-18.5, 3.4), (-14.5, 3.9)), speed=0.9, phase_s=0.5),
 )
 
 
