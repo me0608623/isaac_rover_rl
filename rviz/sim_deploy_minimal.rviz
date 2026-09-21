@@ -1,0 +1,119 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded: [/Global Options1, /NDT 點雲1, /目標與路徑1]
+      Splitter Ratio: 0.5
+    Width: 340
+  - Class: rviz_common/Tool Properties
+    Name: Tool Properties
+Visualization Manager:
+  Global Options:
+    Background Color: 34; 36; 40
+    Fixed Frame: map
+    Frame Rate: 20
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 60
+      Color: 70; 70; 78
+    - Class: rviz_default_plugins/Map
+      Name: 佔據地圖 4v3F
+      Enabled: true
+      Topic:
+        Value: /map
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Color Scheme: map
+      Alpha: 0.55
+    - Class: rviz_default_plugins/PointCloud2
+      Name: NDT 點雲 (map)
+      Enabled: true
+      Topic:
+        Value: /ndt_points_map
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Size (m): 0.03
+      Style: Points
+      Color: 90; 110; 140
+      Color Transformer: FlatColor
+      Decay Time: 0
+    - Class: rviz_default_plugins/PointCloud2
+      Name: 即時光達 /velodyne_points
+      Enabled: true
+      Topic:
+        Value: /velodyne_points
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+      Size (m): 0.05
+      Style: Points
+      Color Transformer: AxisColor
+      Axis: Z
+      Decay Time: 0
+    - Class: rviz_default_plugins/RobotModel
+      Name: 車體模型
+      Enabled: true
+      Description Topic:
+        Value: /robot_description
+        Durability Policy: Transient Local
+      Alpha: 0.9
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: true
+      Show Axes: true
+      Marker Scale: 0.6
+      Frame Timeout: 15
+    - Class: rviz_default_plugins/Path
+      Name: 目標與路徑 /global_path
+      Enabled: true
+      Topic:
+        Value: /global_path
+        Reliability Policy: Reliable
+      Color: 60; 220; 120
+      Line Style: Lines
+      Alpha: 1
+    - Class: rviz_default_plugins/Path
+      Name: 走過的軌跡 /rover_rl/trail
+      Enabled: true
+      Topic:
+        Value: /rover_rl/trail
+        Reliability Policy: Reliable
+      Color: 250; 190; 60
+    - Class: rviz_default_plugins/Pose
+      Name: NDT 位姿 /ndt_pose
+      Enabled: true
+      Topic:
+        Value: /ndt_pose
+        Reliability Policy: Reliable
+      Color: 240; 80; 80
+      Shape: Arrow
+    - Class: rviz_default_plugins/MarkerArray
+      Name: policy markers
+      Enabled: true
+      Topic:
+        Value: /rover_rl_policy/markers
+        Reliability Policy: Reliable
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/SetInitialPose
+      Topic:
+        Value: /initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Value: /goal_pose
+    - Class: rviz_default_plugins/PublishPoint
+      Topic:
+        Value: /clicked_point
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 28
+      Focal Point: {X: -5.67, Y: -0.49, Z: 0}
+      Pitch: 1.2
+      Yaw: 3.6
+      Target Frame: base_footprint
