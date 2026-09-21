@@ -31,3 +31,13 @@ def test_boundary_is_exclusive():
                               ROBOT_SPAWN_WORLD) is False
     assert too_close_to_robot((ROBOT_SPAWN_WORLD[0] + r - 1e-6, ROBOT_SPAWN_WORLD[1]),
                               ROBOT_SPAWN_WORLD) is True
+
+
+# ---------------------------------------------- 與機器人的碰撞過濾
+from character_colliders import ROBOT_ARTICULATION_PATH
+
+
+def test_robot_path_points_at_the_articulation_root():
+    """過濾要掛在 articulation root 上，才能一次涵蓋所有 link。"""
+    assert ROBOT_ARTICULATION_PATH.endswith("charger_rover_urdf5")
+    assert ROBOT_ARTICULATION_PATH.startswith("/World/")

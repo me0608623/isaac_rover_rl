@@ -223,6 +223,10 @@ def build_character_parts(stage, char_path: str, invisible: bool = True,
         mc.CreateApproximationAttr().Set(approximation)
         body = UsdPhysics.RigidBodyAPI.Apply(m.GetPrim())
         body.CreateKinematicEnabledAttr(True)
+        # kinematic = 無限質量，撞到機器人會把車彈飛（實測物理爆掉、
+        # odom 與點雲全 NaN）。過濾接觸力，但保留光達 raycast。
+        from character_colliders import filter_contacts_with_robot
+        filter_contacts_with_robot(stage, m.GetPrim())
         m.GetPrim().CreateAttribute("charge:jointIndex", Sdf.ValueTypeNames.Int,
                                     custom=True).Set(int(ji))
         n_part += 1

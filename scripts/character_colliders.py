@@ -19,6 +19,9 @@ from __future__ import annotations
 
 import math
 
+#: 機器人的 articulation root。碰撞過濾掛在這裡可一次涵蓋所有 link。
+ROBOT_ARTICULATION_PATH = "/World/charger_rover4_5_0/charger_rover_urdf5"
+
 #: 碰撞體與機器人出生點的最小安全距離（m）。
 #: kinematic 剛體是無限質量，和車體重疊會把車彈射出去 —— 2026-09-21 實測
 #: Character_09 距出生點僅 0.36 m，害 base_footprint 被打到 (-2048,-256,-256)。
@@ -73,3 +76,27 @@ def apply_mesh_colliders(stage, root_path: str, robot_xy=None,
             n_mesh += applied_here
 
     return (n_char, n_mesh, skipped)
+
+
+def filter_contacts_with_robot(stage, prim, robot_path: str = ROBOT_ARTICULATION_PATH) -> bool:
+    """關閉 ``prim`` 與機器人之間的**接觸力**，但保留光達 raycast。
+
+    ⚠ 為什麼非做不可：行人是 kinematic 剛體 = **無限質量**。任何與機器人
+    articulation 的接觸都會把車彈射出去 —— 2026-09-21 實測導航途中車體
+    物理爆掉，/odom_gt 與點雲全變成 NaN。出生點的安全距離檢查只擋得住
+    起始重疊，擋不住「走動中的行人撞上移動中的機器人」，而迎面互動
+    正是刻意設計的場景，碰撞必然發生。
+
+    ⚠ 為什麼不是「拿掉碰撞體」：PhysX 光達是對碰撞體 raycast，拿掉就看不到了。
+    FilteredPairsAPI 只過濾**接觸產生**，場景查詢（raycast）走另一條路徑，
+    所以行人仍會出現在點雲裡。
+
+    導航評測本來就不需要模擬撞擊反應 —— 碰撞用光達最近距離判定即可
+    （見 monitor_navigation.COLLISION_RANGE_M）。
+    """
+    from pxr import Sdf, UsdPhysics
+    if not (prim and prim.IsValid()):
+        return False
+    fp = UsdPhysics.FilteredPairsAPI.Apply(prim)
+    fp.CreateFilteredPairsRel().AddTarget(Sdf.Path(robot_path))
+    return True
