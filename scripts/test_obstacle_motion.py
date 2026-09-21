@@ -137,3 +137,31 @@ def test_single_waypoint_never_moves():
 def test_rejects_empty_waypoints():
     with pytest.raises(ValueError):
         position_at([], 1.0, 0.0)
+
+
+# ------------------------------------------- 刻意保留的實車盲區
+def test_default_carts_are_deliberately_below_the_visible_band():
+    """★ 這是**設計選擇**不是 bug：兩台推車刻意低於 policy 可見帶下緣。
+
+    1.43 m 高的光達配 z_filter=0.5，實車現實中就是看不到 0.9 m 的推車 ——
+    模擬保留這個盲區才忠實。2026-09-21 曾把它們抬到 1.15/1.25 m 讓 policy
+    看得見，但那等於讓模擬比現實寬容，已改回。
+
+    若日後有人覺得「推車看不到是 bug」而把高度調高，這條測試會擋下來，
+    強迫他先讀 DEFAULT_OBSTACLES 的註解、理解取捨再決定。
+    """
+    import ros_graph_spec as S
+    carts = {o.name: o for o in S.DEFAULT_OBSTACLES if o.kind == "box"}
+    assert carts, "預設障礙物裡應該要有推車"
+    assert lidar_visible_height(carts["cart_a"].height, SENSOR_H, Z_FILTER) == 0.0, \
+        "cart_a 應對 policy 完全不可見（撞得到但看不到）"
+    assert lidar_visible_height(carts["cart_b"].height, SENSOR_H, Z_FILTER) < 0.1, \
+        "cart_b 應只露出極薄一層"
+
+
+def test_default_person_cylinders_stay_visible():
+    """對照組：人體圓柱必須看得見，否則整個走廊對 policy 就是空的。"""
+    import ros_graph_spec as S
+    for o in S.DEFAULT_OBSTACLES:
+        if o.kind == "person":
+            assert lidar_visible_height(o.height, SENSOR_H, Z_FILTER) > 0.5, o.name
