@@ -1,0 +1,26 @@
+# ── 從車端 rsync 取得的內容 ───────────────────────────────────────────
+# 這些的權威來源是車端（aa@192.168.3.14），不是這個 repo。
+# 取得方式見 docs/2026-09-21_模擬ROS契約對照_PC端回覆.md §12。
+# ⚠ 車端交接單明確要求「一律 rsync 不要 clone」——
+#   ndt_localizer 不在任何 git repo，rover2_ws 本地領先 origin 且有未提交的關鍵修正。
+/src/
+/map/
+
+# ── 建置與執行期產物 ─────────────────────────────────────────────────
+/build/
+/install/
+/log/
+
+# ── 本機環境 ────────────────────────────────────────────────────────
+# .venv  : 測試用（usd-core + numpy + scipy + pytest），與 conda env_isaaclab 隔離
+# vendor : PyTorch 2.10.0+cpu（857 MB），系統 python3.12 沒有；重建方式見 README
+/.venv/
+/vendor/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.director-mode/
+
+# ── 執行期輸出 ──────────────────────────────────────────────────────
+*.log
