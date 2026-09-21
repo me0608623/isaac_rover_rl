@@ -45,9 +45,24 @@ def main() -> int:
                          "-1(預設)=headless 時自動用 0、GUI 時用 1。"
                          "PhysX Lidar 走物理 raycast 不需渲染，headless 下渲染是純浪費，"
                          "而且正好會去跟其他 GPU 工作搶資源。")
-    ap.add_argument("--no-character-colliders", dest="character_colliders",
-                    action="store_false",
-                    help="不替 People 角色套碰撞體（角色就只是看得到、打不到）")
+    ap.add_argument("--character-mode", choices=("parts", "whole", "off"),
+                    default="parts",
+                    help="People 角色的光達可見性："
+                         "parts=逐部位碰撞體（跟著骨架動畫擺動，預設）；"
+                         "whole=整具一塊（凍結在 T-pose）；off=不套（看得到打不到）")
+    ap.add_argument("--part-approx", choices=("convexHull", "none"),
+                    default="convexHull",
+                    help="部位碰撞體的近似。convexHull(預設)便宜且逐部位後幾乎不損"
+                         "輪廓；none 是真三角網格，最精確但實測只有半速")
+    ap.add_argument("--debug-parts", action="store_true",
+                    help="診斷：定期印出角色根節點、UsdSkel 關節、anim.graph 關節"
+                         "與部位碰撞體的位置，判斷動畫是否真的驅動了碰撞體")
+    ap.add_argument("--walk-mode", choices=("procedural", "anim_people", "off"),
+                    default="procedural",
+                    help="角色走路動畫："
+                         "procedural=自寫步態寫進骨架（確定性、headless 可靠，預設）；"
+                         "anim_people=omni.anim.people 行為腳本（headless 下實測起不來）；"
+                         "off=不動")
     ap.add_argument("--no-pedestrians", action="store_true",
                     help="不驅動移動行人（做定位基準或需要完全靜態場景時用）")
     args = ap.parse_args()
@@ -73,6 +88,17 @@ def main() -> int:
     from isaacsim.core.utils.extensions import enable_extension
 
     enable_extension("isaacsim.ros2.bridge")
+    if args.walk_mode == "anim_people":
+        # omni.anim.people 要在開 stage 前啟用，動畫圖才註冊得到。
+        # ⚠ omni.kit.scripting 不可少：omni.anim.people 的 GoTo 是靠掛在角色
+        #   prim 上的 Python 行為腳本執行的。GUI 預設載入這個擴充，精簡 headless
+        #   沒有 —— 少了它角色只會播 idle，日誌會出現
+        #   "CharacterManager::Shutdown() called without a prior successful
+        #    call to CharacterManager::Initialize()"（2026-09-21 實測）。
+        for _e in ("omni.kit.scripting", "omni.anim.people",
+                   "omni.anim.graph.core", "omni.anim.graph.bundle",
+                   "omni.anim.navigation.core", "isaacsim.replicator.agent.core"):
+            enable_extension(_e)
     app.update()
 
     import omni.usd
@@ -112,25 +138,151 @@ def main() -> int:
             out.append(f"{name}=({t[0]:+.4f},{t[1]:+.4f},{t[2]:+.4f})")
         print(f"[run_isaac_sim] {tag}: " + "  ".join(out), flush=True)
 
+    _part_track: dict = {"pts": []}
+
+    def _track_part() -> None:
+        """每步記錄 L_forearm 世界位置 —— 兩點取樣會剛好撞上同相位而誤判。"""
+        from pxr import UsdGeom
+        import omni.usd as _ou
+        st = _ou.get_context().get_stage()
+        pr = st.GetPrimAtPath("/World/Characters/Character_10/lidar_parts/L_forearm")
+        if pr and pr.IsValid():
+            t = UsdGeom.XformCache().GetLocalToWorldTransform(pr).ExtractTranslation()
+            _part_track["pts"].append((t[0], t[1], t[2]))
+
+    def _report_part_range(tag: str) -> None:
+        pts = _part_track["pts"]
+        if len(pts) < 10:
+            return
+        import math as _m
+        xs = [p[0] for p in pts]; ys = [p[1] for p in pts]; zs = [p[2] for p in pts]
+        span = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
+        print(f"[debug-parts] {tag}: L_forearm 取樣 {len(pts)} 點  "
+              f"行程 x={max(xs)-min(xs):.3f} y={max(ys)-min(ys):.3f} "
+              f"z={max(zs)-min(zs):.3f} m  最大 {span:.3f} m", flush=True)
+        _part_track["pts"] = []
+
+    def _dump_parts(tag: str) -> None:
+        """同時量三條路，定位動畫到底有沒有傳到碰撞體。"""
+        from pxr import Usd, UsdGeom, UsdSkel
+        import omni.usd as _ou
+        st = _ou.get_context().get_stage()
+        cache = UsdGeom.XformCache()
+        CH = "/World/Characters/Character_10"
+        ch = st.GetPrimAtPath(CH)
+        if not (ch and ch.IsValid()):
+            return
+        root = cache.GetLocalToWorldTransform(ch).ExtractTranslation()
+        msg = [f"root=({root[0]:+.3f},{root[1]:+.3f})"]
+
+        # (a) 傳統 USD 的 UsdSkel
+        sk = None
+        for pr in Usd.PrimRange(ch, Usd.TraverseInstanceProxies(Usd.PrimAllPrimsPredicate)):
+            if pr.GetTypeName() == "Skeleton":
+                sk = pr
+                break
+        if sk:
+            sq = UsdSkel.Cache().GetSkelQuery(UsdSkel.Skeleton(sk))
+            xf = sq.ComputeJointSkelTransforms(Usd.TimeCode.Default()) if sq else None
+            if xf:
+                t = xf[min(20, len(xf) - 1)].ExtractTranslation()
+                msg.append(f"UsdSkel[20]=({t[0]:+.3f},{t[1]:+.3f},{t[2]:+.3f})")
+
+        # (b) omni.anim.graph.core
+        try:
+            import omni.anim.graph.core as _ag
+            c = _ag.get_character(CH)
+            if c is None:
+                msg.append("animGraph=取不到")
+            else:
+                from pxr import Gf
+                names = []
+                c.get_joint_names(names)
+                if names:
+                    j = names[min(20, len(names) - 1)]
+                    tt, rr = Gf.Vec3d(), Gf.Quatf()
+                    c.get_joint_transform(j, tt, rr)
+                    msg.append(f"animGraph[{j}]=({tt[0]:+.3f},{tt[1]:+.3f},{tt[2]:+.3f})")
+        except Exception as _e:
+            msg.append(f"animGraph 失敗={type(_e).__name__}")
+
+        # (c) 我們建的部位碰撞體 + 座標鏈
+        pp = st.GetPrimAtPath(f"{CH}/lidar_parts/L_forearm")
+        if pp and pp.IsValid():
+            t = cache.GetLocalToWorldTransform(pp).ExtractTranslation()
+            msg.append(f"part(L_forearm)=({t[0]:+.3f},{t[1]:+.3f},{t[2]:+.3f})")
+            ji_a = pp.GetAttribute("charge:jointIndex")
+            if ji_a and sk and ji_a.Get() is not None:
+                jidx = int(ji_a.Get())
+                jn = list(UsdSkel.Skeleton(sk).GetJointsAttr().Get() or [])
+                msg.append(f"joint[{jidx}]={jn[jidx].rsplit('/',1)[-1] if jidx < len(jn) else '?'}")
+                if xf and jidx < len(xf):
+                    jt = xf[jidx].ExtractTranslation()
+                    msg.append(f"jointXf=({jt[0]:+.3f},{jt[1]:+.3f},{jt[2]:+.3f})")
+                bd = UsdSkel.Skeleton(sk).GetBindTransformsAttr().Get()
+                if bd is not None and jidx < len(bd):
+                    bt = bd[jidx].ExtractTranslation()
+                    msg.append(f"bind=({bt[0]:+.3f},{bt[1]:+.3f},{bt[2]:+.3f})")
+                s2c = cache.ComputeRelativeTransform(sk, ch)[0]
+                sc = s2c.ExtractTranslation()
+                msg.append(f"skel2char_t=({sc[0]:+.3f},{sc[1]:+.3f},{sc[2]:+.3f}) "
+                           f"scale={s2c.GetRow3(0).GetLength():.4f}")
+        print(f"[debug-parts] {tag}: " + "  ".join(msg), flush=True)
+
     _dump_poses("play 之前")
 
-    # People 角色：執行期套三角網格碰撞體，PhysX 光達才打得到人體輪廓。
-    # 必須在這裡做 —— 角色網格在 CDN 參照底下，離線 usd-core 看不到。
-    if args.character_colliders:
+    # People 角色：讓光達打得到會擺動的真人形。
+    # 必須在執行期做 —— 角色網格在 CDN 參照底下，離線 usd-core 看不到那些 prim。
+    parts_driver = None
+    walk_driver = None
+    if args.character_mode != "off":
         import sys as _s0
         _s0.path.insert(0, str(Path(__file__).resolve().parent))
-        from character_colliders import apply_mesh_colliders
+        from character_colliders import too_close_to_robot
         from pxr import UsdGeom as _UG
         _st = omni.usd.get_context().get_stage()
         _rb = _st.GetPrimAtPath(
             "/World/charger_rover4_5_0/charger_rover_urdf5/base_footprint")
+        _cache = _UG.XformCache()
         _rxy = None
         if _rb and _rb.IsValid():
-            _t = _UG.XformCache().GetLocalToWorldTransform(_rb).ExtractTranslation()
+            _t = _cache.GetLocalToWorldTransform(_rb).ExtractTranslation()
             _rxy = (_t[0], _t[1])
-        n_c, n_m, skipped = apply_mesh_colliders(_st, "/World/Characters", _rxy)
-        print(f"[run_isaac_sim] 角色三角網格碰撞體：{n_c} 人 / {n_m} 個 mesh"
-              + (f"　跳過(太靠近車) {skipped}" if skipped else ""))
+
+        _root = _st.GetPrimAtPath("/World/Characters")
+        _ok, _skipped, _walks = [], [], []
+        if _root and _root.IsValid():
+            for _c in _root.GetChildren():
+                if _c.GetName() == "Biped_Setup":
+                    continue
+                _t = _cache.GetLocalToWorldTransform(_c).ExtractTranslation()
+                if _rxy and too_close_to_robot((_t[0], _t[1]), _rxy):
+                    _skipped.append(_c.GetName())      # 無限質量會把車彈飛
+                    continue
+                _ok.append(str(_c.GetPath()))
+                _walks.append((_c.GetName(),
+                               [(_t[0], _t[1] + 4.0), (_t[0], _t[1] - 4.0)]))
+
+        # anim_people 路線需要 GoTo 命令與 Stop→Play，否則只站著播 idle。
+        # 預設的 procedural 路線不走這裡（自己把步態寫進骨架）。
+        if args.walk_mode == "anim_people":
+            from anim_people import setup as _anim_setup
+            print(f"[run_isaac_sim] 動畫設定：{_anim_setup(_st, walks=_walks)[2]}")
+
+        if args.character_mode == "parts":
+            from character_parts import build_character_parts
+            _np = _nf = 0
+            for _cp in _ok:
+                a, b, _ = build_character_parts(_st, _cp,
+                                                approximation=args.part_approx)
+                _np += a; _nf += b
+            print(f"[run_isaac_sim] 逐部位碰撞體：{len(_ok)} 人 / {_np} 部位 / {_nf} 面"
+                  + (f"　跳過(太靠近車) {_skipped}" if _skipped else ""))
+        else:
+            from character_colliders import apply_mesh_colliders
+            n_c, n_m, sk = apply_mesh_colliders(_st, "/World/Characters", _rxy)
+            print(f"[run_isaac_sim] 整具碰撞體(T-pose)：{n_c} 人 / {n_m} mesh"
+                  + (f"　跳過 {sk}" if sk else ""))
 
     # 移動行人：kinematic rigid body，位姿每個物理步由我們覆寫。
     driver = None
@@ -148,6 +300,21 @@ def main() -> int:
         )
         print(f"[run_isaac_sim] 移動行人 {len(driver)} 名"
               + ("" if len(driver) else "  ⚠ USD 裡沒有行人 prim，請重跑 build_ros_graph.py"))
+
+    if args.walk_mode == "anim_people":
+        from anim_people import restart_for_behavior_scripts
+        restart_for_behavior_scripts(sim, app)      # 漏掉這步角色站著不動
+        print("[run_isaac_sim] Stop→Play 完成，行為腳本已初始化")
+    walk_driver = None
+    if args.walk_mode == "procedural" and args.character_mode != "off":
+        from character_walk import CharacterWalkDriver
+        walk_driver = CharacterWalkDriver(omni.usd.get_context().get_stage(), _ok)
+        print(f"[run_isaac_sim] 程序化步態：{len(walk_driver)} 人 / "
+              f"{walk_driver.segments_driven()} 個擺動關節")
+    if args.character_mode == "parts":
+        from character_parts import CharacterPartsDriver
+        parts_driver = CharacterPartsDriver(omni.usd.get_context().get_stage(), _ok)
+        print(f"[run_isaac_sim] 部位驅動器：{len(parts_driver)} 塊碰撞體")
 
     print(f"[run_isaac_sim] 開始模擬  physics={args.physics_hz} Hz  render={args.render_hz} Hz")
 
@@ -170,6 +337,10 @@ def main() -> int:
         while app.is_running():
             if driver is not None:
                 driver.update(sim.current_time)
+            if walk_driver is not None:
+                walk_driver.update(sim.current_time)   # 先把步態寫進骨架
+            if parts_driver is not None:
+                parts_driver.update()                  # 部位再跟著骨架走
             do_render = render_every > 0 and steps % render_every == 0
             sim.step(render=do_render)
             steps += 1
@@ -182,6 +353,11 @@ def main() -> int:
 
             if steps in (1, 30, 120, 600):
                 _dump_poses(f"step {steps}")
+            if args.debug_parts:
+                _track_part()
+                if steps in (60, 240, 480, 720):
+                    _dump_parts(f"step {steps}")
+                    _report_part_range(f"step {steps}")
             if steps % int(args.physics_hz) == 0:
                 now = time.perf_counter()
                 # ⚠ 即時比 = 模擬時間前進量 / 牆鐘前進量。不能用 physics_hz/牆鐘 ——

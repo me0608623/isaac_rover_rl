@@ -96,3 +96,66 @@ def test_face_tie_is_resolved_deterministically():
 def test_handles_mixed_polygon_sizes():
     vseg = ["head"] * 7
     assert assign_faces([3, 4], [0, 1, 2, 3, 4, 5, 6], vseg) == ["head", "head"]
+
+
+# ---------------------------------------------------------------- 子網格抽取
+from skel_parts import extract_submesh
+
+
+def test_submesh_keeps_only_its_own_faces():
+    """一個正方形拆成兩個三角形，各歸不同部位。"""
+    pts = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+    counts = [3, 3]
+    idx = [0, 1, 2, 0, 2, 3]
+    fseg = ["torso", "head"]
+    p, c, i = extract_submesh(pts, counts, idx, fseg, "torso")
+    assert c == [3]
+    assert len(p) == 3                      # 只留用得到的頂點
+    assert len(i) == 3
+
+
+def test_submesh_reindexes_vertices_compactly():
+    """★ 索引沒重新編號的話，PhysX cook 出來的碰撞體會是錯的形狀。"""
+    pts = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+    p, c, i = extract_submesh(pts, [3, 3], [0, 1, 2, 0, 2, 3], ["head", "torso"], "torso")
+    assert sorted(i) == [0, 1, 2]           # 緊密重編號
+    assert set(p) == {(0, 0, 0), (1, 1, 0), (0, 1, 0)}   # 對應原本的 0,2,3
+
+
+def test_submesh_of_absent_segment_is_empty():
+    p, c, i = extract_submesh([(0, 0, 0)] * 3, [3], [0, 1, 2], ["head"], "L_calf")
+    assert (p, c, i) == ([], [], [])
+
+
+def test_submesh_preserves_winding_order():
+    """繞序反了法向量會朝內，碰撞體判定會出錯。"""
+    pts = [(0, 0, 0), (1, 0, 0), (1, 1, 0)]
+    _, _, i = extract_submesh(pts, [3], [2, 0, 1], ["torso"], "torso")
+    assert i == [0, 1, 2]                   # 原順序 2,0,1 → 重編號後仍是同一繞序
+
+
+def test_submesh_handles_quads():
+    pts = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+    p, c, i = extract_submesh(pts, [4], [0, 1, 2, 3], ["torso"], "torso")
+    assert c == [4] and len(p) == 4 and len(i) == 4
+
+
+# ---------------------------------------------------------------- 前綴衝突
+def test_toe_bones_are_not_mistaken_for_finger_bones():
+    """★ 實際踩過：Reallusion 把腳趾命名為 L_PinkyToe1，而手指規則是 l_pinky，
+    startswith 讓腳趾命中手指規則 → 前臂的碰撞體被綁到腳趾骨，
+    整塊掉到腳踝高度（實測 z=0.032 m）。"""
+    for toe in ("RL_BoneRoot/Hip/Pelvis/L_Thigh/L_Calf/L_Foot/L_PinkyToe1",
+                "RL_BoneRoot/Hip/Pelvis/L_Thigh/L_Calf/L_Foot/L_IndexToe1",
+                "RL_BoneRoot/Hip/Pelvis/L_Thigh/L_Calf/L_Foot/L_MidToe1",
+                "RL_BoneRoot/Hip/Pelvis/L_Thigh/L_Calf/L_Foot/L_RingToe1",
+                "RL_BoneRoot/Hip/Pelvis/L_Thigh/L_Calf/L_Foot/L_BigToe1"):
+        assert joint_to_segment(toe) == "L_calf", toe
+    for toe in ("RL_BoneRoot/Hip/Pelvis/R_Thigh/R_Calf/R_Foot/R_PinkyToe1",
+                "RL_BoneRoot/Hip/Pelvis/R_Thigh/R_Calf/R_Foot/R_BigToe1"):
+        assert joint_to_segment(toe) == "R_calf", toe
+
+
+def test_real_finger_bones_still_map_to_the_forearm():
+    for f in ("L_Pinky1", "L_Index2", "L_Mid3", "L_Ring1", "L_Thumb1"):
+        assert joint_to_segment(f"RL_BoneRoot/.../L_Hand/{f}") == "L_forearm", f

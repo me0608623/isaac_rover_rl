@@ -26,8 +26,12 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=8.0)
     ap.add_argument("--range", type=float, default=DEFAULT_RANGE_M)
     ap.add_argument("--bearing", type=float, default=DEFAULT_BEARING_DEG)
-    ap.add_argument("--halfwidth", type=float, default=0.9,
+    ap.add_argument("--halfwidth", type=float, default=0.6,
                     help="目標周圍的取樣半寬(m)，用來把人從牆裡切出來")
+    ap.add_argument("--auto", action="store_true",
+                    help="自動定位：角色會走動時用，沿視線找最近的非牆叢集")
+    ap.add_argument("--wall-range", type=float, default=11.5,
+                    help="超過此距離視為牆（--auto 用）")
     args = ap.parse_args()
 
     import rclpy
@@ -61,6 +65,22 @@ def main() -> int:
         return 1
     xyz = np.concatenate(chunks)
     print(f"收到 {len(chunks)} 幀，共 {len(xyz)} 點")
+
+    if args.auto:
+        # 角色在走動 → 沿視線掃描，找最近的「人尺度」叢集。
+        # 牆壁距離固定且很遠，先排除；剩下最近的密集段就是人。
+        br0 = math.radians(args.bearing)
+        ang = np.arctan2(xyz[:, 1], xyz[:, 0])
+        rng = np.hypot(xyz[:, 0], xyz[:, 1])
+        beam = (np.abs(ang - br0) < math.radians(4.0)) & (rng < args.wall_range)
+        cand = rng[beam]
+        if len(cand) < 50:
+            print("[FAIL] 視線方向沒有近距離回波")
+            return 1
+        hist, edges = np.histogram(cand, bins=np.arange(1.5, args.wall_range, 0.25))
+        hot = np.where(hist > hist.max() * 0.25)[0]
+        args.range = float(edges[hot[0]] + 0.125)      # 最近的密集段
+        print(f"  自動定位：目標在 {args.range:.2f} m（掃描 {len(cand)} 點）")
 
     # 取目標附近的柱狀區域（sensor frame）
     br = math.radians(args.bearing)

@@ -27,6 +27,12 @@ SEGMENTS: tuple[str, ...] = (
 #: 骨骼葉名關鍵字 → 部位。由上而下第一個命中者勝，所以順序有意義：
 #: 例如 "L_ForearmTwist" 必須在 "L_Forearm" 之前或用 startswith 才不會誤判。
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # ⚠ 腳趾必須排在手指之前。Reallusion 把腳趾命名為 L_PinkyToe1 /
+    #   L_IndexToe1，而手指規則是 l_pinky / l_index —— startswith 會讓腳趾
+    #   命中手指規則，把前臂的碰撞體綁到腳趾骨（實測整塊掉到 z=0.032 m）。
+    #   這裡改用 "toe" 子字串比對，且優先判定。
+    ("L_calf",     ("l_toe", "l_foot", "l_calf")),
+    ("R_calf",     ("r_toe", "r_foot", "r_calf")),
     ("head",       ("head", "neck", "eye", "jaw", "tongue", "teeth", "facial")),
     ("L_forearm",  ("l_forearm", "l_hand", "l_index", "l_mid", "l_ring",
                     "l_pinky", "l_thumb")),
@@ -34,8 +40,6 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
                     "r_pinky", "r_thumb")),
     ("L_upperarm", ("l_upperarm", "l_elbow")),
     ("R_upperarm", ("r_upperarm", "r_elbow")),
-    ("L_calf",     ("l_calf", "l_foot", "l_toe")),
-    ("R_calf",     ("r_calf", "r_foot", "r_toe")),
     ("L_thigh",    ("l_thigh", "l_knee")),
     ("R_thigh",    ("r_thigh", "r_knee")),
     # 鎖骨、脊椎、骨盆都歸軀幹（見模組說明）
@@ -50,6 +54,9 @@ FALLBACK_SEGMENT = "torso"
 def joint_to_segment(joint_path: str) -> str:
     """骨骼路徑（如 ``RL_BoneRoot/Hip/Pelvis/L_Thigh``）→ 部位名。"""
     leaf = joint_path.rsplit("/", 1)[-1].lower()
+    # 名字裡帶 "toe" 的一律是腳趾，先攔下來（見 _RULES 的說明）。
+    if "toe" in leaf:
+        return "R_calf" if leaf.startswith("r_") else "L_calf"
     for segment, keys in _RULES:
         if any(leaf.startswith(k) for k in keys):
             return segment
@@ -103,3 +110,33 @@ def assign_faces(face_vertex_counts, face_vertex_indices,
         out.append(min(winners, key=lambda s: SEGMENTS.index(s)
                        if s in SEGMENTS else len(SEGMENTS)))
     return out
+
+
+def extract_submesh(points, face_vertex_counts, face_vertex_indices,
+                    face_segments: list[str], segment: str):
+    """抽出屬於 ``segment`` 的面，並把頂點索引緊密重編號。
+
+    重編號是必要的：PhysX cook 三角網格時是照索引取頂點陣列，若沿用原索引
+    卻只帶部分頂點，cook 出來會是完全錯誤的形狀。
+
+    Returns:
+        ``(points, face_vertex_counts, face_vertex_indices)``，皆為新的緊密陣列。
+    """
+    new_pts: list = []
+    new_counts: list[int] = []
+    new_idx: list[int] = []
+    remap: dict[int, int] = {}
+
+    cursor = 0
+    for face, n in enumerate(face_vertex_counts):
+        vs = face_vertex_indices[cursor:cursor + n]
+        cursor += n
+        if face >= len(face_segments) or face_segments[face] != segment:
+            continue
+        new_counts.append(n)
+        for v in vs:                      # 保持原繞序，法向量才不會朝內
+            if v not in remap:
+                remap[v] = len(new_pts)
+                new_pts.append(points[v])
+            new_idx.append(remap[v])
+    return (new_pts, new_counts, new_idx)
