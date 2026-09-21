@@ -416,20 +416,20 @@ DEFAULT_OBSTACLES: tuple[Obstacle, ...] = (
     Obstacle("person_a", -3.0, 6.3, "person"),
     Obstacle("person_b", -6.0, 5.4, "person"),
     Obstacle("person_c", -9.5, 6.2, "person"),
-    # ⚠⚠ 這兩台的高度**刻意**低於 policy 的可見帶下緣。
+    # 障礙物高度一律 >= 1.5 m（與真人相當），確保 policy 看得見。
     #
-    #   前處理的 z_filter=0.5 是在 sensor frame 濾 |z|，感測器離地 1.43 m，
-    #   所以 72 維觀測只看得到地板上方 [0.93, 1.93] m 這一層。高度 0.90 m 的
-    #   箱子整個在下方 —— **有碰撞體（車撞得到）但觀測裡完全不存在**。
+    #   policy 的 72 維觀測只保留地板上方 [0.93, 1.93] m 這一層
+    #   （z_filter=0.5 在 sensor frame 濾 |z|，感測器離地 1.43 m）。
+    #   高度 1.0 m 的推車只露出 7 cm，實務上等於看不到 —— 2026-09-21 實測
+    #   車全速撞上 cart_b 卡死（命令 |v|=0.577 但位移 0.000 m），
+    #   導航失敗。把「撞得到但看不到」的物體放在必經路線上，等於保證撞車，
+    #   測不到真正想測的動態避障。
     #
-    #   這不是 bug，是**實車真實存在的感知盲區**：1.43 m 高的光達配同樣的
-    #   z_filter，現實中一樣看不到 0.9 m 的推車。2026-09-21 曾把它們抬到
-    #   1.15/1.25 m 讓 policy 看得見，但那等於讓模擬比現實寬容，已改回。
-    #
-    #   要量這個盲區有多大用 obstacle_motion.lidar_visible_height；
-    #   要暫時關掉這個難度，把高度改成 > 0.93 即可。
-    Obstacle("cart_a", -4.6, 5.3, "box", size_x=0.7, size_y=0.5, height=0.90),
-    Obstacle("cart_b", -11.5, 5.8, "box", size_x=0.8, size_y=0.6, height=1.00),
+    #   ⚠ 這個盲區在**實車上是真的**（同樣的光達高度與 z_filter），
+    #   只是不該用它當導航測試的場景。要專門驗證盲區風險時，
+    #   另外建一組矮障礙物的情境，不要混在一般導航測試裡。
+    Obstacle("cart_a", -4.6, 5.3, "box", size_x=0.7, size_y=0.5, height=1.50),
+    Obstacle("cart_b", -11.5, 5.8, "box", size_x=0.8, size_y=0.6, height=1.55),
 )
 
 

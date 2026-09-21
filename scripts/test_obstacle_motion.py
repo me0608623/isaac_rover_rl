@@ -139,29 +139,42 @@ def test_rejects_empty_waypoints():
         position_at([], 1.0, 0.0)
 
 
-# ------------------------------------------- 刻意保留的實車盲區
-def test_default_carts_are_deliberately_below_the_visible_band():
-    """★ 這是**設計選擇**不是 bug：兩台推車刻意低於 policy 可見帶下緣。
+# ------------------------------------------- 障礙物必須看得見
+def test_every_default_obstacle_is_visible_to_the_policy():
+    """★ 所有障礙物都必須進得了 policy 的可見帶，否則等於保證撞車。
 
-    1.43 m 高的光達配 z_filter=0.5，實車現實中就是看不到 0.9 m 的推車 ——
-    模擬保留這個盲區才忠實。2026-09-21 曾把它們抬到 1.15/1.25 m 讓 policy
-    看得見，但那等於讓模擬比現實寬容，已改回。
+    2026-09-21 實測：高 1.00 m 的 cart_b 只露出 7 cm，車全速撞上卡死
+    （命令 |v|=0.577 但位移 0.000 m），導航失敗。把「撞得到但看不到」
+    的物體放在必經路線上，測不到真正想測的動態避障。
 
-    若日後有人覺得「推車看不到是 bug」而把高度調高，這條測試會擋下來，
-    強迫他先讀 DEFAULT_OBSTACLES 的註解、理解取捨再決定。
+    ⚠ 盲區本身在實車上是真的（同樣的光達高度與 z_filter=0.5），
+    只是不該用它當一般導航測試的場景。
     """
     import ros_graph_spec as S
-    carts = {o.name: o for o in S.DEFAULT_OBSTACLES if o.kind == "box"}
-    assert carts, "預設障礙物裡應該要有推車"
-    assert lidar_visible_height(carts["cart_a"].height, SENSOR_H, Z_FILTER) == 0.0, \
-        "cart_a 應對 policy 完全不可見（撞得到但看不到）"
-    assert lidar_visible_height(carts["cart_b"].height, SENSOR_H, Z_FILTER) < 0.1, \
-        "cart_b 應只露出極薄一層"
+    for o in S.DEFAULT_OBSTACLES:
+        v = lidar_visible_height(o.height, SENSOR_H, Z_FILTER)
+        assert v > 0.3, f"{o.name} 高度 {o.height} m 只露出 {v:.2f} m，policy 幾乎看不到"
 
 
-def test_default_person_cylinders_stay_visible():
-    """對照組：人體圓柱必須看得見，否則整個走廊對 policy 就是空的。"""
+def test_obstacles_are_at_least_human_height():
+    """障礙物高度一律 >= 1.5 m（與真人相當）。"""
     import ros_graph_spec as S
     for o in S.DEFAULT_OBSTACLES:
-        if o.kind == "person":
-            assert lidar_visible_height(o.height, SENSOR_H, Z_FILTER) > 0.5, o.name
+        assert o.height >= 1.5, f"{o.name} 高度 {o.height} m < 1.5 m"
+
+
+def test_the_blind_spot_calculation_still_works():
+    """盲區的計算本身保留 —— 要專門驗證矮障礙物風險時會用到。"""
+    assert lidar_visible_height(0.90, SENSOR_H, Z_FILTER) == 0.0
+    assert lidar_visible_height(1.00, SENSOR_H, Z_FILTER) == pytest.approx(0.07)
+
+
+def test_obstacle_set_is_complete():
+    """★ 守住「障礙物憑空消失」—— 2026-09-21 一次字串替換把 cart_a 整行吃掉，
+    而當時沒有任何測試擋得住：其他測試都是「對每個障礙物檢查…」，
+    少一個反而更容易通過。
+    """
+    import ros_graph_spec as S
+    names = {o.name for o in S.DEFAULT_OBSTACLES}
+    assert names == {"person_a", "person_b", "person_c", "cart_a", "cart_b"}, \
+        f"障礙物組合不對：{sorted(names)}"

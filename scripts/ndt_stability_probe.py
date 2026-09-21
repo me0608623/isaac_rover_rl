@@ -32,6 +32,9 @@ def main() -> int:
     from tf2_ros import Buffer, TransformListener
 
     samples: list[tuple[float, float, float, float, float, float]] = []
+    #: 逐**幀**跳動量。要用 TF 自身的時間戳去重 —— 以固定週期取樣會把
+    #: 「NDT 還沒更新」也算成一筆 0，把中位數稀釋掉。
+    frame_jumps: list[float] = []
 
     class Probe(Node):
         def __init__(self):
@@ -39,7 +42,9 @@ def main() -> int:
             self.buf = Buffer()
             self.lis = TransformListener(self.buf, self)
             self.t0 = None
-            self.create_timer(0.1, self.tick)
+            self._last_stamp = None
+            self._last_xyz = None
+            self.create_timer(0.05, self.tick)
 
         def tick(self):
             try:
@@ -58,6 +63,11 @@ def main() -> int:
             pitch = math.asin(max(-1.0, min(1.0, 2 * (q.w * q.y - q.z * q.x))))
             samples.append((now - self.t0, t.x, t.y, t.z,
                             math.degrees(roll), math.degrees(pitch)))
+            stamp = (tf.header.stamp.sec, tf.header.stamp.nanosec)
+            if stamp != self._last_stamp:
+                if self._last_xyz is not None:
+                    frame_jumps.append(math.dist((t.x, t.y, t.z), self._last_xyz))
+                self._last_stamp, self._last_xyz = stamp, (t.x, t.y, t.z)
 
     rclpy.init()
     node = Probe()
@@ -85,6 +95,17 @@ def main() -> int:
     growth = tilt[half:].mean() - tilt[:half].mean()
     print(f"  傾角後半段 − 前半段 = {growth:+.2f}°"
           + ("  ⚠ 持續惡化" if growth > 1.0 else "  （未持續惡化）"))
+    # 逐幀跳動 —— 唯一能與實車直接對比的指標。
+    # odom_drift_injector 的文件記載實車實測：
+    #   靜止時 map→odom 逐幀只變 5.6 mm，車一動就平均跳 0.134 m（24 倍）。
+    if frame_jumps:
+        fj = np.array(frame_jumps)
+        print(f"  逐幀跳動  中位 {np.median(fj)*1000:.1f} mm  平均 {fj.mean()*1000:.1f} mm  "
+              f"p95 {np.percentile(fj,95)*1000:.1f} mm  最大 {fj.max()*1000:.1f} mm  ({len(fj)} 幀)")
+        print(f"    實車參考：靜止 5.6 mm／移動中平均 134 mm")
+    else:
+        print("  逐幀跳動：取不到（TF 時間戳沒變過？）")
+
     verdict = ("穩定" if tilt.max() < 2.0 and dxy.max() < 0.1
                else "可疑" if tilt.max() < 5.0 else "不穩定")
     print(f"  → {verdict}")
