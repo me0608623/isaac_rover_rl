@@ -108,3 +108,34 @@ def test_base_pose_covers_all_gait_joints():
 def test_base_pose_is_not_a_full_ninety_degrees():
     """完全 90° 會讓手臂緊貼身體、穿模。留一點外張。"""
     assert abs(BASE_POSE_RAD["L_upperarm"]) < math.radians(90)
+
+
+# ── 相位改由「走過的距離」推進（ORCA 下速度會變）──────────────────────
+def test_stride_length_is_speed_times_period():
+    from gait import cycle_period, stride_length
+
+    for v in (0.4, 0.7, 1.0):
+        assert stride_length(v) == pytest.approx(v * cycle_period(v))
+
+
+def test_phase_advance_matches_time_based_phase_at_constant_speed():
+    """★ 等速時，用距離推進的相位必須與原本用時間算的一致，
+    否則換成 ORCA 之後腳步會與位移對不上（滑步）。"""
+    import math
+
+    from gait import phase_advance, stride_phase
+
+    for v in (0.5, 0.8, 1.0):
+        dt, steps = 1.0 / 60.0, 300
+        by_dist = sum(phase_advance(v * dt, v) for _ in range(steps))
+        by_time = 2 * math.pi * (steps * dt) / (2 * math.pi / (2 * math.pi)) * 0  # 佔位
+        expected = stride_phase(steps * dt, v)
+        assert by_dist % (2 * math.pi) == pytest.approx(expected, abs=1e-6)
+
+
+def test_phase_does_not_advance_when_standing_still():
+    """★ 速度 0 時不能推進相位，否則站著的人會原地踏步。"""
+    from gait import phase_advance
+
+    assert phase_advance(0.0, 0.0) == 0.0
+    assert phase_advance(0.5, 0.0) == 0.0

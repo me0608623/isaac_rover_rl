@@ -82,3 +82,33 @@ def test_default_walk_speeds_are_human():
     """成人步行 0.6~1.6 m/s。"""
     for w in S.DEFAULT_CHARACTER_WALKS:
         assert 0.5 <= w.speed <= 1.6, f"{w.name} 速度 {w.speed} 不像人"
+
+
+# ── 腳底對地 ───────────────────────────────────────────────────────────
+def test_origin_z_puts_the_feet_on_the_floor():
+    """★ 角色的原點**不在腳底**，在腳底上方 12~15 cm（20 個角色實測）。
+
+    2026-09-22 的兩個對稱錯誤：
+      * 站著的角色沿用 USD 的 z=0 → 懸空 17~20 cm
+      * 會走的角色被擺在 z=floor_top → 腳陷進地板 12~15 cm
+    兩者都源自「原點在腳底」這個錯假設。
+    """
+    from character_path import origin_z_for_feet_on_floor
+
+    # 腳底在原點下方 0.1248 m、地板在 -0.3233 → 原點該放在 -0.1985
+    z = origin_z_for_feet_on_floor(floor_top=-0.3233, foot_offset=0.1248)
+    assert z == pytest.approx(-0.1985, abs=1e-4)
+
+
+def test_zero_foot_offset_degenerates_to_floor_top():
+    from character_path import origin_z_for_feet_on_floor
+
+    assert origin_z_for_feet_on_floor(-0.5, 0.0) == pytest.approx(-0.5)
+
+
+def test_foot_offset_from_bbox():
+    """腳底偏移 = 原點 z − bbox 最低 z。"""
+    from character_path import foot_offset_from_bbox
+
+    assert foot_offset_from_bbox(origin_z=0.0, bbox_min_z=-0.1248) == pytest.approx(0.1248)
+    assert foot_offset_from_bbox(origin_z=1.0, bbox_min_z=0.9) == pytest.approx(0.1)

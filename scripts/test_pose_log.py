@@ -97,3 +97,59 @@ def test_motion_window_falls_back_to_full_range_when_never_moving():
     s = [_s(i / 30.0, 0.0) for i in range(60)]
     t0, t1 = motion_window(s)
     assert (t0, t1) == pytest.approx((s[0].t, s[-1].t))
+
+
+# ── 行人軌跡（ORCA 之後，第二遍不能重算，只能照播）────────────────────
+def test_crowd_row_roundtrips():
+    from pose_log import CrowdSample, format_crowd_row, parse_crowd_rows
+
+    s = CrowdSample(1.5, "Character_10", 2.0, -3.0, 0.75, 1.25, 0.9)
+    back = parse_crowd_rows([format_crowd_row(s)])[0]
+    assert back.name == "Character_10"
+    assert (back.t, back.x, back.y) == pytest.approx((1.5, 2.0, -3.0))
+    assert (back.yaw, back.phase, back.speed) == pytest.approx((0.75, 1.25, 0.9))
+
+
+def test_crowd_at_interpolates_position_and_phase():
+    from pose_log import CrowdSample, crowd_at
+
+    rows = [CrowdSample(0.0, "a", 0.0, 0.0, 0.0, 0.0, 1.0),
+            CrowdSample(1.0, "a", 10.0, 0.0, 0.0, 2.0, 1.0)]
+    got = crowd_at(rows, 0.25)["a"]
+    assert got[0] == pytest.approx(2.5)
+    assert got[3] == pytest.approx(0.5)
+
+
+def test_crowd_phase_interpolation_handles_wraparound():
+    """★ 相位是 [0,2π) 會繞回 0。直接線性內插會在繞回那一刻倒退一整圈，
+    腳步看起來像瞬間往回抽一下。"""
+    import math
+
+    from pose_log import CrowdSample, crowd_at
+
+    rows = [CrowdSample(0.0, "a", 0.0, 0.0, 0.0, 6.2, 1.0),
+            CrowdSample(1.0, "a", 0.0, 0.0, 0.0, 0.1, 1.0)]
+    ph = crowd_at(rows, 0.5)["a"][3]
+    # 應該落在 6.2 → 2π → 0.1 的中間，不是 3.15
+    assert ph > 6.2 or ph < 0.1, f"相位 {ph:.3f} 走了長弧"
+
+
+def test_crowd_at_keeps_each_person_separate():
+    from pose_log import CrowdSample, crowd_at
+
+    rows = [CrowdSample(0.0, "a", 0.0, 0.0, 0.0, 0.0, 1.0),
+            CrowdSample(0.0, "b", 5.0, 0.0, 0.0, 0.0, 1.0),
+            CrowdSample(1.0, "a", 1.0, 0.0, 0.0, 0.0, 1.0),
+            CrowdSample(1.0, "b", 6.0, 0.0, 0.0, 0.0, 1.0)]
+    got = crowd_at(rows, 0.5)
+    assert set(got) == {"a", "b"}
+    assert got["a"][0] == pytest.approx(0.5)
+    assert got["b"][0] == pytest.approx(5.5)
+
+
+def test_crowd_at_on_empty_log_returns_nothing():
+    """★ 沒有行人紀錄時要回空 dict，不能丟例外 ——
+    靜態情境本來就沒有人在走。"""
+    from pose_log import crowd_at
+
+    assert crowd_at([], 1.0) == {}

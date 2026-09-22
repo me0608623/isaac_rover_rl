@@ -266,6 +266,17 @@ def align_navmesh_floor_to_corridor(stage: Usd.Stage, spec: S.SimRosSpec) -> lis
     """
     floor_top = measure_corridor_floor_top(stage)
     changes: list[Change] = []
+    # ⚠ 上表面與走廊地板**共面** → z-fighting，NavFloor 的預設灰色材質會蓋掉
+    #   真正的地板貼圖，算出來整條走廊的地板是灰的（2026-09-22 使用者回報）。
+    #   設成 invisible 解掉：visibility 只影響算圖，PhysX 的碰撞與 raycast
+    #   走另一條路徑，所以車照樣踩得到、光達照樣打得到，只是不再擋住貼圖。
+    for path in NAV_FLOOR_PRIMS:
+        prim = _require(stage, path)
+        vis = prim.GetAttribute("visibility")
+        before = vis.Get() if vis and vis.IsValid() else None
+        UsdGeom.Imageable(prim).CreateVisibilityAttr("invisible")
+        changes.append(Change(path, "NavFloor 設為不可見（露出真地板貼圖）",
+                              before, "invisible"))
     for path in NAV_FLOOR_PRIMS:
         prim = _require(stage, path)
         half = float(prim.GetAttribute("size").Get() or 2.0) / 2.0
@@ -525,10 +536,12 @@ def align_sensor_joint_to_urdf(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Cha
 def place_corridor_obstacles(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Change]:
     """在走廊放帶碰撞體的障礙物，讓 PhysX 光達打得到、車必須閃避。
 
-    ⚠ 不用 omni.anim.people 的角色：論文 §2.8.2 已載明「型別為 Lidar 的 RTX 光達
-    不對骨架網格角色做光線追蹤」，而本專案用的 PhysX 光達是對**碰撞體** raycast，
-    骨架角色沒有碰撞體 → 同樣照不到。且 People 資產是抓不到的 S3 連結。
-    用帶碰撞體的幾何代理才是能被感知、能被閃避的障礙物。
+    幾何代理負責**物理**，外觀另外處理：
+      * 人形障礙 → 不可見的靜態圓柱（真的擋住車）+ 疊一個 People 角色（外觀與光達輪廓）
+      * 推車     → 可見的方箱（本來就長得像推車）
+    為什麼不讓角色自己擋車：角色的逐部位碰撞體是 kinematic = 無限質量，
+    任何接觸都會把車彈飛，所以接觸力被過濾掉了（character_colliders），
+    光達打得到但擋不住車。
 
     位置用 map frame 指定（與 routing 站同一個座標系），底部貼在走廊地板上。
     """
@@ -557,7 +570,13 @@ def place_corridor_obstacles(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Chang
             g.CreateExtentAttr([(-o.radius, -o.radius, -o.height/2),
                                 (o.radius, o.radius, o.height/2)])
             scale = Gf.Vec3d(1.0, 1.0, 1.0)
-            desc = f"圓柱 r={o.radius} h={o.height}"
+            desc = f"圓柱 r={o.radius} h={o.height}（不可見，只當碰撞體）"
+            # ⚠ 人形障礙的圓柱設成**不可見**：使用者要看到真人，不是圓柱。
+            #   外觀由一個 People 角色疊在同一位置負責（scene_variants 的
+            #   StandingPerson）。圓柱留著是因為它是**靜態碰撞體**，會真的
+            #   擋住車；角色的逐部位碰撞體是 kinematic（無限質量），接觸力
+            #   必須過濾掉（否則把車彈飛），擋不住車。兩者分工。
+            UsdGeom.Imageable(g.GetPrim()).CreateVisibilityAttr("invisible")
         else:
             g = UsdGeom.Cube.Define(stage, path)
             g.CreateSizeAttr(1.0)
@@ -770,7 +789,10 @@ def main(argv: list[str] | None = None) -> int:
 
     spec = S.SimRosSpec().with_tf_ownership(S.default_tf_ownership())
     if args.obstacles:
-        spec = replace(spec, obstacles=S.DEFAULT_OBSTACLES)
+        # 把**所有 run 變體**的障礙一起寫進 USD，執行期只用 SetActive 開關
+        # （執行期新建 prim 不保證進算圖 —— 見 all_variant_obstacles 的說明）。
+        from scene_variants import all_variant_obstacles
+        spec = replace(spec, obstacles=all_variant_obstacles())
     if args.map_patch:
         spec = replace(spec, map_patch=True)
     report = build(args.input, args.output, spec)

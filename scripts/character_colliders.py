@@ -33,6 +33,60 @@ def too_close_to_robot(char_xy, robot_xy, clearance: float = MIN_CLEARANCE_FROM_
     return math.hypot(char_xy[0] - robot_xy[0], char_xy[1] - robot_xy[1]) < clearance
 
 
+#: 站立角色與 routing 站點的最小淨空（m，map frame）。
+#: 站著的人立在導航點位上會擋住目標：2026-09-22 實測 Character_15 離 c24
+#: 只有 0.40 m、Character_09 離 c28 只有 0.36 m（後者剛好是錄影的起點）。
+#: 1.0 m 取自 monitor_navigation.ARRIVE_RADIUS_M —— 抵達判定半徑內不該站人。
+#: ⚠ 只管**站著**的角色。會走的角色路線本來就沿走廊、必然經過站點，
+#: 那是刻意設計的動態互動，不適用這條規則。
+MIN_CLEARANCE_FROM_ROUTING_NODE_M = 1.0
+
+
+def nearest_routing_node(map_xy, stations):
+    """回傳離 ``map_xy`` 最近的 routing 站點 ``(站名, 距離)``（map frame）。
+
+    站點表是空的時回傳 ``(None, inf)`` —— 讀不到表要當成「沒有限制」，
+    不能讓呼叫端把全部角色都當成違規停用掉。
+    """
+    best, bd = None, float("inf")
+    for name, pose in stations.items():
+        d = math.hypot(pose[0] - map_xy[0], pose[1] - map_xy[1])
+        if d < bd:
+            best, bd = name, d
+    return best, bd
+
+
+def too_close_to_routing_node(map_xy, stations,
+                              clearance: float = MIN_CLEARANCE_FROM_ROUTING_NODE_M) -> bool:
+    """這個位置是否壓在某個 routing 站點上。"""
+    return nearest_routing_node(map_xy, stations)[1] < clearance
+
+
+#: 站立角色彼此的最小間距（m）。2026-09-22 使用者指定「減少行人在一起的密度」。
+MIN_SPACING_BETWEEN_STANDING_M = 2.5
+
+
+def thin_by_spacing(items, min_spacing: float = MIN_SPACING_BETWEEN_STANDING_M):
+    """把擠在一起的角色挑掉，回傳 ``(保留的名字, 丟掉的名字)``。
+
+    貪心法：依**名字排序**後逐一檢查，離已保留者都夠遠才留。
+
+    ⚠ 排序是刻意的，不是為了好看：第一遍（導航）與第二遍（回放算圖）
+    是兩個不同的行程，必須留下**同一批人**，否則影片裡的人數會與 rosbag
+    對不起來。輸入順序若來自 USD 走訪，兩遍不保證一致。
+    """
+    kept: list[str] = []
+    kept_xy: list[tuple[float, float]] = []
+    dropped: list[str] = []
+    for name, xy in sorted(items, key=lambda it: it[0]):
+        if any(math.hypot(xy[0] - k[0], xy[1] - k[1]) < min_spacing for k in kept_xy):
+            dropped.append(name)
+            continue
+        kept.append(name)
+        kept_xy.append(xy)
+    return kept, dropped
+
+
 def apply_mesh_colliders(stage, root_path: str, robot_xy=None,
                          clearance: float = MIN_CLEARANCE_FROM_ROBOT_M):
     """對 ``root_path`` 底下每個角色的 Mesh 套三角網格碰撞體。

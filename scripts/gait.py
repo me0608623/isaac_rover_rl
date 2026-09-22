@@ -80,6 +80,25 @@ def stride_phase(t: float, speed: float) -> float:
     return (2.0 * math.pi * t / cycle_period(speed)) % (2.0 * math.pi)
 
 
+def stride_length(speed: float) -> float:
+    """一個完整步態週期走過的距離（m）。"""
+    return speed * cycle_period(speed)
+
+
+def phase_advance(ds: float, speed: float) -> float:
+    """走了 ``ds`` 公尺，步態相位該前進多少 rad。
+
+    為什麼需要它：接上 ORCA 之後行人會為了閃避而加減速甚至停下，
+    再用「相位 = f(模擬時間)」算腳步就會與實際位移脫節（滑步／原地踏步）。
+    改成用走過的距離積分，速度怎麼變腳步都跟得上。
+
+    等速時與 ``stride_phase`` 等價（有測試盯著）。
+    """
+    if speed <= 0.0 or ds <= 0.0:
+        return 0.0
+    return 2.0 * math.pi * ds / stride_length(speed)
+
+
 def joint_angles(phase: float, speed: float) -> dict[str, float]:
     """給定相位與速度，回傳各關節的擺動角（rad，繞左右軸）。
 

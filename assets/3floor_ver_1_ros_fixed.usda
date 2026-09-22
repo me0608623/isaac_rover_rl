@@ -131,7 +131,7 @@ over "World"
                     custom double inputs:maxDeceleration = 1.2
                     custom double inputs:maxLinearSpeed = 1.5
                     custom double inputs:wheelDistance = 0.559212
-                    custom double inputs:wheelRadius = 0.120947
+                    custom double inputs:wheelRadius = 0.131847
                 }
             }
 
@@ -144,22 +144,25 @@ over "World"
 
     over "NavFloor_H"
     {
+        token visibility = "invisible"
         double3 xformOp:translate = (-4, 5.5, -0.4233022191647538)
     }
 
     over "NavFloor_V1"
     {
+        token visibility = "invisible"
         double3 xformOp:translate = (-4, -8, -0.4233022191647538)
     }
 
     over "NavFloor_V2"
     {
+        token visibility = "invisible"
         double3 xformOp:translate = (-4, 19, -0.4233022191647538)
     }
 
     def Xform "SimObstacles"
     {
-        def Cylinder "person_a" (
+        def Cylinder "ped_1_0" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
@@ -167,11 +170,12 @@ over "World"
             float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
             double height = 1.7
             double radius = 0.25
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.8619548142719902, 5.823251735923353, 0.5266977823253622, 1) )
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.0882011558138727, 8.689484924681459, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
-        def Cylinder "person_b" (
+        def Cylinder "pair_1_1" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
@@ -179,11 +183,12 @@ over "World"
             float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
             double height = 1.7
             double radius = 0.25
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.32372076205911093, 8.908750740142688, 0.5266977823253622, 1) )
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.7113074549089935, 11.93267411716133, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
-        def Cylinder "person_c" (
+        def Cylinder "pair_1_2" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
@@ -191,27 +196,197 @@ over "World"
             float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
             double height = 1.7
             double radius = 0.25
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.532751388233967, 12.28931947113622, 0.5266977823253622, 1) )
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.3318094638079419, 11.923121266677304, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
-        def Cube "cart_a" (
+        def Cylinder "ped_2_0" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.0174314063876444, 9.164445599439011, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "pair_2_1" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.7113074549089935, 11.93267411716133, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "pair_2_2" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.3318094638079419, 11.923121266677304, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "ped_2_3" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.1269587962343808, 15.26938480133928, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "ped_3_0" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.998667089391369, 9.313270665901834, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "pair_3_1" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.767944101821985, 11.956587124269946, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "pair_3_2" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.3884461107209323, 11.96613997475397, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "ped_3_3" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.5745353325833442, 14.639924521329599, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cube "box_3_4" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
             float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
             double size = 1
-            matrix4d xformOp:transform = ( (0.7, 0, 0, 0), (0, 0.5, 0, 0), (0, 0, 1.5, 0), (0.058559040144000596, 7.5304585863411, 0.4266977823253623, 1) )
+            matrix4d xformOp:transform = ( (0.7, 0, 0, 0), (0, 0.5, 0, 0), (0, 0, 1.55, 0), (-1.2962682979658213, 15.698500694699154, 0.45169778232536234, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
-        def Cube "cart_b" (
+        def Cylinder "ped_4_0" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.124571738909382, 7.675653488650158, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "ped_4_1" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.2893986505820338, 9.253771341872364, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "pair_4_2" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.767944101821985, 11.956587124269946, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "pair_4_3" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.3884461107209323, 11.96613997475397, 0.5266977823253622, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cube "box_4_4" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
             float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
             double size = 1
-            matrix4d xformOp:transform = ( (0.8, 0, 0, 0), (0, 0.6, 0, 0), (0, 0, 1.55, 0), (1.3725200763540162, 14.322623660551379, 0.45169778232536234, 1) )
+            matrix4d xformOp:transform = ( (0.7, 0, 0, 0), (0, 0.5, 0, 0), (0, 0, 1.55, 0), (-1.5399476427919958, 15.091092778299402, 0.45169778232536234, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Cylinder "ped_4_5" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
+            double height = 1.7
+            double radius = 0.25
+            token visibility = "invisible"
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.4609423433107196, 15.12278333380806, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
     }

@@ -57,6 +57,17 @@ def main() -> int:
                          "模擬秒拿到比實車更多次決策，錄下的行為不代表真實表現。")
     ap.add_argument("--record-width", type=int, default=1280)
     ap.add_argument("--record-height", type=int, default=720)
+    ap.add_argument("--run-index", type=int, default=0,
+                    help="場景變體編號（1 起算）。>0 時障礙與行人的**數量與位置**"
+                         "依 scene_variants.variant() 決定，每一趟都不一樣、"
+                         "且數量依序更多。0=沿用 ros_graph_spec 的固定預設場景。")
+    ap.add_argument("--crowd-mode", choices=("orca", "path"), default="orca",
+                    help="行人怎麼走：orca(預設)=用 RVO2 解 ORCA，會與車和彼此"
+                         "互相閃避；path=沿固定折線等速往返（舊行為，不理會車）")
+    ap.add_argument("--crowd-log", default="",
+                    help="把每個行人的位姿逐幀寫成 CSV。ORCA 下行人會因應車的"
+                         "動作閃避，第二遍回放不能重算（更新頻率與積分順序不同，"
+                         "軌跡會發散），只能照播。錄影時必給。")
     ap.add_argument("--pose-log", default="",
                     help="把車體的世界位姿逐幀寫成 CSV，供第二趟回放算圖用。"
                          "錄影必須分兩趟：path tracing 會把 RTF 壓到 0.35，"
@@ -156,17 +167,28 @@ def main() -> int:
         app.update()
     print("[run_isaac_sim] stage 載入完成")
 
+    # 場景變體：USD 裡寫了**所有** run 變體的障礙，這裡只開這一趟要用的。
+    _sv = None
+    if args.run_index >= 1:
+        from scene_variants import variant as _variant
+        _sv = _variant(args.run_index)
+    _want = ({o.name for o in _sv.obstacles} if _sv is not None else None)
+
     # 情境：關掉靜態障礙就整個 prim 停用（SetActive(False) 會同時從算圖與
     # 物理中移除，不必分別處理可見性與碰撞體）。
     _obs_root = omni.usd.get_context().get_stage().GetPrimAtPath(
         "/World/SimObstacles")
     if _obs_root and _obs_root.IsValid():
-        _n_obs = 0
+        _n_on = _n_all = 0
         for _o in _obs_root.GetChildren():
-            _o.SetActive(scen.obstacles_enabled)
-            _n_obs += 1
-        print(f"[run_isaac_sim] 情境 {scen.name}：靜態障礙 {_n_obs} 個 "
-              f"{'啟用' if scen.obstacles_enabled else '停用'}"
+            _n_all += 1
+            _on = scen.obstacles_enabled and (_want is None
+                                              or _o.GetName() in _want)
+            _o.SetActive(_on)
+            _n_on += 1 if _on else 0
+        print(f"[run_isaac_sim] 情境 {scen.name}"
+              + (f"／變體 run{args.run_index}" if _sv else "")
+              + f"：靜態障礙 {_n_on}/{_n_all} 啟用"
               f"　行人走動 {'開' if scen.walks_enabled else '關'}")
 
     from pxr import Gf
@@ -307,7 +329,17 @@ def main() -> int:
     if args.character_mode != "off":
         import sys as _s0
         _s0.path.insert(0, str(Path(__file__).resolve().parent))
-        from character_colliders import too_close_to_robot
+        from character_colliders import (nearest_routing_node, thin_by_spacing,
+                                         too_close_to_robot,
+                                         too_close_to_routing_node)
+        import ros_graph_spec as _S0
+        _stations = _S0.read_station_nodes(_S0.ROUTING_STATION_JSON)
+        _variant_walks = (_sv.walks if _sv is not None
+                          else _S0.DEFAULT_CHARACTER_WALKS)
+        _walk_names0 = {w.name for w in _variant_walks}
+        # 變體指定了名單就照名單，其餘角色整個不出現（讓「生成位置」跟著變）。
+        _allowed = ((_walk_names0 | {p_.name for p_ in _sv.standing})
+                    if _sv is not None else None)
         from pxr import UsdGeom as _UG
         _st = omni.usd.get_context().get_stage()
         _rb = _st.GetPrimAtPath(
@@ -327,19 +359,54 @@ def main() -> int:
         #   而且因為不在驅動清單裡，他會一直停在綁定姿勢（T-pose）。
         #   SetActive(False) 同時從算圖與物理移除，對光達/NDT 沒有任何影響。
         _all_chars = []
+        _on_node = []
         if _root and _root.IsValid():
             for _c in _root.GetChildren():
                 if _c.GetName() == "Biped_Setup":
+                    continue
+                if _allowed is not None and _c.GetName() not in _allowed:
+                    _c.SetActive(False)
                     continue
                 _t = _cache.GetLocalToWorldTransform(_c).ExtractTranslation()
                 if _rxy and too_close_to_robot((_t[0], _t[1]), _rxy):
                     _skipped.append(_c.GetName())
                     _c.SetActive(False)
                     continue
+                # 站著的角色不得壓在 routing 站點上（會擋住導航目標）。
+                # 會走的角色不適用 —— 它們的路線本來就沿走廊、必然經過站點。
+                if _c.GetName() not in _walk_names0:
+                    _mx, _my, _ = _S0.world_to_map(_t[0], _t[1], 0.0)
+                    if too_close_to_routing_node((_mx, _my), _stations):
+                        _nn, _nd = nearest_routing_node((_mx, _my), _stations)
+                        _on_node.append(f"{_c.GetName()}@{_nn}({_nd:.2f}m)")
+                        _c.SetActive(False)
+                        continue
                 _all_chars.append(str(_c.GetPath()))
                 _ok.append(str(_c.GetPath()))
                 _walks.append((_c.GetName(),
                                [(_t[0], _t[1] + 4.0), (_t[0], _t[1] - 4.0)]))
+        if _on_node:
+            print(f"[run_isaac_sim] 停用(站在 routing 點位上) {_on_node}")
+
+        # 站立角色擠在一起就挑掉幾個（會走的不算 —— 它們本來就會散開）。
+        _stand = [(p_.rsplit("/", 1)[-1], p_) for p_ in _all_chars
+                  if p_.rsplit("/", 1)[-1] not in _walk_names0]
+        _xy = {}
+        for _nm, _p in _stand:
+            _tt = _cache.GetLocalToWorldTransform(
+                _st.GetPrimAtPath(_p)).ExtractTranslation()
+            _xy[_nm] = (_tt[0], _tt[1])
+        _kept, _crowded = thin_by_spacing([(n, _xy[n]) for n, _ in _stand])
+        if _crowded:
+            _drop = set(_crowded)
+            for _nm, _p in _stand:
+                if _nm in _drop:
+                    _st.GetPrimAtPath(_p).SetActive(False)
+            _all_chars = [p_ for p_ in _all_chars
+                          if p_.rsplit("/", 1)[-1] not in _drop]
+            _ok = [p_ for p_ in _ok if p_.rsplit("/", 1)[-1] not in _drop]
+            _walks = [w for w in _walks if w[0] not in _drop]
+            print(f"[run_isaac_sim] 停用(站太近、降低密度) {_crowded}")
 
         # ⚠⚠ 這裡曾經預設只給「會走路的角色」碰撞體，理由是「角色點雲污染 NDT」。
         #   **該假設已被對照實驗推翻**（2026-09-21，車靜止 60 s）：
@@ -401,11 +468,42 @@ def main() -> int:
         _st2 = omni.usd.get_context().get_stage()
         walk_driver = CharacterWalkDriver(
             _st2, _all_chars,
-            walks=_S2.DEFAULT_CHARACTER_WALKS if scen.walks_enabled else (),
+            walks=(_sv.walks if _sv is not None else _S2.DEFAULT_CHARACTER_WALKS)
+                  if scen.walks_enabled else (),
             floor_top=measure_corridor_floor_top(_st2))
+        # 站立的人物擺到「人形障礙」的位置（圓柱不可見、只當碰撞體）
+        _n_place = 0
+        if _sv is not None:
+            for _p in _sv.standing:
+                if walk_driver.place_standing(_p.name, (_p.map_x, _p.map_y), _p.yaw):
+                    _n_place += 1
+        # 其餘站著的人降到地板（USD 原本懸空 17~20 cm）
+        _n_ground = walk_driver.ground_standing()
         print(f"[run_isaac_sim] 程序化步態：{len(walk_driver)} 人 / "
               f"{walk_driver.segments_driven()} 個擺動關節 / "
-              f"{walk_driver.walking()} 人沿路徑移動")
+              f"{walk_driver.walking()} 人沿路徑移動"
+              f"　站立人物擺位 {_n_place} 個　腳底對地 {_n_ground} 個")
+    crowd = None
+    if (args.crowd_mode == "orca" and walk_driver is not None
+            and scen.walks_enabled):
+        from orca_crowd import OrcaCrowd, ccw_rect
+        _obs = []
+        if scen.obstacles_enabled:
+            for _o in (_sv.obstacles if _sv is not None else _S2.DEFAULT_OBSTACLES):
+                _hx = (_o.size_x / 2.0 if _o.kind == "box" else 0.25)
+                _hy = (_o.size_y / 2.0 if _o.kind == "box" else 0.25)
+                _obs.append(ccw_rect(_o.map_x, _o.map_y, _hx + 0.15, _hy + 0.15))
+        # 走廊兩側牆：擋住行人被 ORCA 推出走廊（走廊約 map y∈[3,8]）
+        _walls = (ccw_rect(-10.0, 2.3, 14.0, 0.3),
+                  ccw_rect(-10.0, 8.7, 14.0, 0.3))
+        crowd = OrcaCrowd([w for w in (_sv.walks if _sv is not None
+                                       else _S2.DEFAULT_CHARACTER_WALKS)
+                           if w.name in {c.rsplit("/", 1)[-1] for c in _all_chars}],
+                          time_step=1.0 / args.physics_hz,
+                          obstacles=_obs, wall_bands=_walls)
+        print(f"[run_isaac_sim] ORCA 行人：{len(crowd)} 人　"
+              f"靜態障礙 {len(_obs)} 個　牆 {len(_walls)} 段")
+
     if args.character_mode == "parts":
         from character_parts import CharacterPartsDriver
         parts_driver = CharacterPartsDriver(omni.usd.get_context().get_stage(), _ok)
@@ -443,6 +541,14 @@ def main() -> int:
               f"  {args.record_width}x{args.record_height}"
               f"  每 {args.record_every} tick 一幀")
 
+    crowd_fp = None
+    if args.crowd_log:
+        from pose_log import CROWD_HEADER as _CH
+        Path(args.crowd_log).parent.mkdir(parents=True, exist_ok=True)
+        crowd_fp = open(args.crowd_log, "w")
+        crowd_fp.write(_CH + "\n")
+        print(f"[run_isaac_sim] 行人軌跡 → {args.crowd_log}")
+
     pose_fp = None
     if args.pose_log:
         from pose_log import HEADER as _POSE_HEADER
@@ -464,6 +570,8 @@ def main() -> int:
     print(f"[run_isaac_sim] render_every={render_every} "
           f"({'不渲染' if render_every == 0 else f'每 {render_every} 步渲染一次'})")
 
+    _orca_prev: dict = {}
+    do_render_prev = [True]      # 行人紀錄與位姿紀錄同頻（見迴圈內註解）
     steps = 0
     t_start = time.perf_counter()
     t_report = t_start
@@ -471,7 +579,30 @@ def main() -> int:
     try:
         while app.is_running():
             if walk_driver is not None:
-                walk_driver.update(sim.current_time)   # 先把步態寫進骨架
+                _cp = None
+                if crowd is not None:
+                    from pxr import UsdGeom as _UG0
+                    import ros_graph_spec as _S9
+                    _rp = omni.usd.get_context().get_stage().GetPrimAtPath(
+                        "/World/charger_rover4_5_0/charger_rover_urdf5/base_link")
+                    _rm = _UG0.XformCache().GetLocalToWorldTransform(_rp)
+                    _rt = _rm.ExtractTranslation()
+                    _rmx, _rmy, _ = _S9.world_to_map(_rt[0], _rt[1], 0.0)
+                    _prev = _orca_prev.get("xy")
+                    _rv = ((0.0, 0.0) if _prev is None else
+                           ((_rmx - _prev[0]) * args.physics_hz,
+                            (_rmy - _prev[1]) * args.physics_hz))
+                    _orca_prev["xy"] = (_rmx, _rmy)
+                    _cp = crowd.step((_rmx, _rmy), _rv)
+                    if crowd_fp is not None and do_render_prev[0]:
+                        from pose_log import (CrowdSample as _CS,
+                                              format_crowd_row as _fcr)
+                        for _n, _v in _cp.items():
+                            crowd_fp.write(_fcr(_CS(
+                                sim.current_time, _n, _v[0], _v[1],
+                                _v[2] if _v[2] is not None else
+                                walk_driver.last_yaw(_n), _v[3], _v[4])) + "\n")
+                walk_driver.update(sim.current_time, poses=_cp)
             if parts_driver is not None:
                 parts_driver.update()                  # 部位再跟著骨架走
             # ⚠ do_render 必須先算 —— 錄影區塊要用它。
@@ -516,6 +647,7 @@ def main() -> int:
                     pose_fp.write(_fr(_PS(
                         sim.current_time, (_tt[0], _tt[1], _tt[2]),
                         (_qq.GetReal(), _im[0], _im[1], _im[2]))) + "\n")
+            do_render_prev[0] = do_render
             sim.step(render=do_render)
             steps += 1
 
@@ -548,6 +680,9 @@ def main() -> int:
     except KeyboardInterrupt:
         print("[run_isaac_sim] 中斷")
     finally:
+        if crowd_fp is not None:
+            crowd_fp.close()
+            print(f"[run_isaac_sim] 行人軌跡已寫入 {args.crowd_log}")
         if pose_fp is not None:
             pose_fp.close()
             print(f"[run_isaac_sim] 位姿軌跡已寫入 {args.pose_log}")

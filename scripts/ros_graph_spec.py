@@ -30,7 +30,24 @@ BASE_LINK_TO_VELODYNE_M: tuple[float, float, float] = (-0.02, 0.0, 1.3)
 WHEEL_BASE_LENGTH_M: float = 0.559212
 
 #: driver_chgh.yaml: (left_wheel_diameter + right_wheel_diameter) / 4
+#: ⚠ 這是**實車**的標定輪徑。Isaac 的差動控制器**不要**用它，用下面那個。
 WHEEL_RADIUS_M: float = (0.244211 + 0.239577) / 4.0
+
+#: Isaac 車模輪子的**有效滾動半徑**。差動控制器要用這個，不是實車標定值。
+#:
+#: 為什麼不一樣：USD 車模的輪子就是比實車大。碰撞幾何的 bbox 半徑量到 0.1358，
+#: 而實車標定是 0.120947。控制器把 v 換成輪子角速度用的是 v / r，
+#: 填錯 r 車就跑錯速度 —— 2026-09-22 從 12 趟錄影量到：
+#:   指令 0.600 m/s（24134 筆沒有一筆超過 0.601），車實際跑 0.663 m/s
+#:   直線滿速穩態 450 個樣本：v_act / v_cmd = 1.0901 ± 0.0256
+#:   （兩趟各自 1.0871 / 1.0907，差 0.3%）
+#:   → 有效滾動半徑 = 0.120947 × 1.0901 = 0.131847
+#: 有效值比幾何 bbox 的 0.1358 略小，是滑移與接觸壓縮，物理上合理。
+#:
+#: ⚠ 不要「順手改回」WHEEL_RADIUS_M —— 那會讓模擬車比實車快 9%，
+#: 論文引用的每段秒數與「車 vs 行人相對速度」全部偏高。
+#: 要讓幾何也忠實就得縮車模的輪子，那會連帶動到碰撞與外觀，是另一件事。
+SIM_WHEEL_RADIUS_M: float = 0.131847
 
 #: driver_chgh.yaml: profile_omega_max
 MAX_ANGULAR_SPEED_RAD_S: float = 1.2
@@ -212,7 +229,9 @@ class DifferentialDriveSpec:
     """
 
     wheel_distance_m: float = WHEEL_BASE_LENGTH_M
-    wheel_radius_m: float = WHEEL_RADIUS_M
+    #: ⚠ 用 SIM_WHEEL_RADIUS_M（車模的有效滾動半徑），不是實車標定的
+    #: WHEEL_RADIUS_M —— 理由見該常數的說明。
+    wheel_radius_m: float = SIM_WHEEL_RADIUS_M
     max_linear_speed_m_s: float = MAX_LINEAR_SPEED_M_S
     max_angular_speed_rad_s: float = MAX_ANGULAR_SPEED_RAD_S
     max_acceleration_m_s2: float = MAX_ACCELERATION_M_S2
@@ -480,17 +499,28 @@ class CharacterWalk:
 #: ⚠ 所有靜態障礙物都在 y ≥ 5.3，所以下半條車道（y ≈ 3.2~4.7）是淨空的，
 #: 沿走廊行走的角色走那裡；橫穿路線則挑障礙物之間的空隙。有測試檢查
 #: 每個路徑點與靜態障礙物至少相距 0.8 m。
+#: 行人速度上限（m/s）。2026-09-22 使用者指定：最高 1.0。
+#: 原本 Character_10 是 1.1、Character_19 是 1.2，都已下修。
+MAX_CHARACTER_SPEED_M_S: float = 1.0
+
 DEFAULT_CHARACTER_WALKS: tuple[CharacterWalk, ...] = (
-    # 迎面：沿走廊走向機器人出發點
-    CharacterWalk("Character_10", ((-12.0, 4.3), (-3.5, 4.7)), speed=1.1, phase_s=0.0),
-    # 同向較慢：車從後方接近，需要超車或跟隨
-    CharacterWalk("Character_11", ((-15.0, 3.7), (-8.0, 4.0)), speed=0.7, phase_s=2.0),
-    # 橫穿：在 person_b(-6) 與 person_c(-9.5) 之間切過走廊
-    CharacterWalk("Character_19", ((-7.8, 3.5), (-7.8, 6.6)), speed=1.2, phase_s=1.0),
-    # 橫穿：走廊深處
-    CharacterWalk("Character_12", ((-13.0, 3.2), (-13.0, 5.4)), speed=1.0, phase_s=3.5),
-    # 沿走廊，最深處
-    CharacterWalk("Character_13", ((-18.5, 3.4), (-14.5, 3.9)), speed=0.9, phase_s=0.5),
+    # ── 沿走廊的三個人分在**三條不同的 y 車道**，避免擠成一團 ──
+    #    2026-09-22 使用者指定：放慢（≤1.0）、拉長來回距離、降低密度。
+    #    週期彼此不成整數倍，相位也拉開，三個人不會長期同步。
+    # 迎面：走廊中段車道，走向機器人出發點。來回 30.0 m / 週期 30.0 s
+    CharacterWalk("Character_10", ((-16.5, 4.0), (-1.5, 4.3)), speed=1.0, phase_s=0.0),
+    # 同向較慢：內側車道，車從後方接近需要超車或跟隨。來回 28.0 m / 週期 40.0 s
+    CharacterWalk("Character_11", ((-19.0, 3.4), (-5.0, 3.7)), speed=0.7, phase_s=9.0),
+    # 沿走廊最內側車道，涵蓋走廊深處。來回 22.0 m / 週期 27.5 s
+    CharacterWalk("Character_13", ((-21.0, 3.0), (-10.0, 3.4)), speed=0.8, phase_s=13.0),
+    # ── 橫穿：受走廊寬度限制，距離拉不長，改用相位錯開 ──
+    # 在 person_b(-6) 與 person_c(-9.5) 之間切過走廊。來回 7.2 m / 週期 7.2 s
+    CharacterWalk("Character_19", ((-7.8, 3.0), (-7.8, 6.6)), speed=1.0, phase_s=1.0),
+    # 橫穿：走廊深處。來回 5.0 m / 週期 6.25 s
+    # ⚠ y 下限是 3.0（走廊邊界，test_all_default_walks_stay_inside_the_corridor）。
+    #   速度 0.8 是調出來的：0.9 會讓週期 5.56 s 與最深處那位的 27.5 s 成 4.95 倍，
+    #   兩人長期同步又擠在一起。0.8 → 6.25 s，與其他四個週期都不成整數倍。
+    CharacterWalk("Character_12", ((-13.0, 3.0), (-13.0, 5.5)), speed=0.8, phase_s=3.0),
 )
 
 

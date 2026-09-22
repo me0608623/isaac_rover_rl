@@ -30,8 +30,15 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--usd", type=Path, default=DEFAULT_USD)
     ap.add_argument("--pose-log", required=True)
+    ap.add_argument("--crowd-log", default="",
+                    help="第一遍記下的行人軌跡。ORCA 行人會因應車的動作閃避，"
+                         "這裡**不能重算**（更新頻率與積分順序與第一遍不同，"
+                         "軌跡會發散、與 rosbag 裡光達打到的人對不起來），只能照播。")
     ap.add_argument("--out", required=True, help="PNG 序列輸出目錄")
     ap.add_argument("--scenario", default="mixed")
+    ap.add_argument("--run-index", type=int, default=0,
+                    help="場景變體編號。⚠ 必須與第一遍**完全相同**，"
+                         "否則影片裡的障礙與行人跟 rosbag 裡光達打到的對不起來。")
     ap.add_argument("--fps", type=float, default=30.0, help="影片幀率（模擬時間）")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
@@ -45,14 +52,25 @@ def main() -> int:
     args = ap.parse_args()
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from pose_log import motion_window, parse_rows, pose_at
+    from pose_log import (crowd_at, motion_window, parse_crowd_rows,
+                          parse_rows, pose_at)
     from scenarios import scenario_config
 
     scen = scenario_config(args.scenario)
+    sv = None
+    if args.run_index >= 1:
+        from scene_variants import variant as _variant
+        sv = _variant(args.run_index)
     samples = parse_rows(Path(args.pose_log).read_text().splitlines())
     if len(samples) < 2:
         print(f"[replay] 位姿軌跡只有 {len(samples)} 筆，無法回放", file=sys.stderr)
         return 2
+    crowd_rows = []
+    if args.crowd_log and Path(args.crowd_log).exists():
+        crowd_rows = parse_crowd_rows(Path(args.crowd_log).read_text().splitlines())
+        print(f"[replay] 行人軌跡 {len(crowd_rows)} 筆 / "
+              f"{len({r.name for r in crowd_rows})} 人", flush=True)
+
     t0, t1 = samples[0].t, samples[-1].t
     if not args.no_trim:
         # 第一趟是「先開 Isaac、再開 ROS、再發初始位姿」，車真正起步大概在
@@ -88,35 +106,77 @@ def main() -> int:
     st = omni.usd.get_context().get_stage()
     from build_ros_graph import measure_corridor_floor_top
     from camera_recorder import CameraRecorder
-    from character_colliders import too_close_to_robot
+    from character_colliders import (nearest_routing_node, thin_by_spacing,
+                                     too_close_to_robot, too_close_to_routing_node)
     from character_walk import CharacterWalkDriver
     import ros_graph_spec as S
 
     floor = measure_corridor_floor_top(st)
 
+    want = ({o.name for o in sv.obstacles} if sv is not None else None)
     obs_root = st.GetPrimAtPath("/World/SimObstacles")
     if obs_root and obs_root.IsValid():
+        n_on = 0
         for o in obs_root.GetChildren():
-            o.SetActive(scen.obstacles_enabled)
+            on = scen.obstacles_enabled and (want is None or o.GetName() in want)
+            o.SetActive(on)
+            n_on += 1 if on else 0
+        print(f"[replay] 障礙 {n_on} 個啟用"
+              + (f"（變體 run{args.run_index}）" if sv else ""), flush=True)
 
     # 角色：跟第一趟用同一條規則決定誰被停用，畫面才對得上。
     spawn_xy = (samples[0].pos[0], samples[0].pos[1])
+    stations = S.read_station_nodes(S.ROUTING_STATION_JSON)
     chars = []
+    stand_xy = {}
+    variant_walks = sv.walks if sv is not None else S.DEFAULT_CHARACTER_WALKS
+    walk_names = {w.name for w in variant_walks}
+    allowed = ((walk_names | {p.name for p in sv.standing})
+               if sv is not None else None)
     croot = st.GetPrimAtPath("/World/Characters")
     cache = UsdGeom.XformCache()
     if croot and croot.IsValid():
         for c in croot.GetChildren():
             if c.GetName() == "Biped_Setup":
                 continue
+            if allowed is not None and c.GetName() not in allowed:
+                c.SetActive(False)
+                continue
             t = cache.GetLocalToWorldTransform(c).ExtractTranslation()
             if too_close_to_robot((t[0], t[1]), spawn_xy):
                 c.SetActive(False)
                 continue
+            # ⚠ 這條規則必須與第一遍（run_isaac_sim）逐字相同，
+            #   否則回放出來的畫面會多／少一個人，跟 rosbag 對不起來。
+            if c.GetName() not in {w.name for w in S.DEFAULT_CHARACTER_WALKS}:
+                mx, my, _ = S.world_to_map(t[0], t[1], 0.0)
+                if too_close_to_routing_node((mx, my), stations):
+                    c.SetActive(False)
+                    continue
             chars.append(str(c.GetPath()))
+            stand_xy[c.GetName()] = (t[0], t[1])
+    # ⚠ 與第一遍逐字相同的疏密規則 —— 兩遍留下的人必須一樣多、一樣是誰。
+    _kept, crowded = thin_by_spacing(
+        [(n, xy) for n, xy in stand_xy.items() if n not in walk_names])
+    if crowded:
+        drop = set(crowded)
+        for cp in list(chars):
+            if cp.rsplit("/", 1)[-1] in drop:
+                st.GetPrimAtPath(cp).SetActive(False)
+        chars = [cp for cp in chars if cp.rsplit("/", 1)[-1] not in drop]
+        print(f"[replay] 停用(站太近、降低密度) {crowded}", flush=True)
+
     walk_driver = CharacterWalkDriver(
         st, chars,
-        walks=S.DEFAULT_CHARACTER_WALKS if scen.walks_enabled else (),
+        walks=variant_walks if scen.walks_enabled else (),
         floor_top=floor)
+    n_place = 0
+    if sv is not None:
+        for sp in sv.standing:
+            if walk_driver.place_standing(sp.name, (sp.map_x, sp.map_y), sp.yaw):
+                n_place += 1
+    n_ground = walk_driver.ground_standing()
+    print(f"[replay] 站立人物擺位 {n_place} 個　腳底對地 {n_ground} 個", flush=True)
     print(f"[replay] 情境 {scen.name}：角色 {len(walk_driver)} 人 / "
           f"{walk_driver.walking()} 人走動　靜態障礙 "
           f"{'啟用' if scen.obstacles_enabled else '停用'}", flush=True)
@@ -181,7 +241,8 @@ def main() -> int:
     for i in range(n_frames):
         t = t0 + i / args.fps
         p = pose_at(samples, t)
-        walk_driver.update(t)
+        # ⚠ 有第一遍的行人軌跡就照播，不要重算 ORCA。
+        walk_driver.update(t, poses=(crowd_at(crowd_rows, t) if crowd_rows else None))
 
         art.set_world_pose(position=np.array(p.pos, dtype=np.float32),
                            orientation=np.array(p.quat, dtype=np.float32))

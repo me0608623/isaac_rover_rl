@@ -128,3 +128,103 @@ def motion_window(samples, move_eps: float = 0.05,
     t0 = max(samples[0].t, moving_t[0] - lead)
     t1 = min(samples[-1].t, moving_t[-1] + tail)
     return (t0, t1)
+
+
+# ── 行人軌跡 ───────────────────────────────────────────────────────────
+#
+# 接上 ORCA 之後行人會**因應車的動作**閃避，所以他們的軌跡依賴車的軌跡。
+# 第二遍回放時車是照第一遍的位姿播的，若行人重算一次 ORCA，
+# 更新頻率與積分順序都與第一遍不同，軌跡會發散 —— 影片裡的人就跟
+# rosbag 裡光達打到的人對不起來。所以行人也逐幀記下來，第二遍純播放。
+
+CROWD_HEADER = "t,name,x,y,yaw,phase,speed"
+
+
+@dataclass(frozen=True)
+class CrowdSample:
+    """某個模擬時刻、某個行人的狀態（map frame）。"""
+
+    t: float
+    name: str
+    x: float
+    y: float
+    yaw: float
+    phase: float
+    speed: float
+
+
+def format_crowd_row(s: CrowdSample) -> str:
+    return (f"{s.t:.6f},{s.name},{s.x:.5f},{s.y:.5f},"
+            f"{s.yaw:.6f},{s.phase:.6f},{s.speed:.4f}")
+
+
+def parse_crowd_rows(lines) -> list[CrowdSample]:
+    out: list[CrowdSample] = []
+    for ln in lines:
+        ln = ln.strip()
+        if not ln or ln.startswith("t,"):
+            continue
+        p = ln.split(",")
+        if len(p) != 7:
+            continue
+        try:
+            out.append(CrowdSample(float(p[0]), p[1], float(p[2]), float(p[3]),
+                                   float(p[4]), float(p[5]), float(p[6])))
+        except ValueError:
+            continue
+    return out
+
+
+def _lerp_phase(a: float, b: float, u: float) -> float:
+    """相位內插，走短弧。
+
+    ⚠ 相位是 [0, 2π) 會繞回 0。直接線性內插會在繞回那一刻倒退一整圈，
+    畫面上腳步像被往回抽一下。
+    """
+    import math
+
+    two_pi = 2.0 * math.pi
+    d = (b - a + math.pi) % two_pi - math.pi
+    return (a + d * u) % two_pi
+
+
+def crowd_at(rows, t: float):
+    """取 ``t`` 時刻每個行人的 ``(x, y, yaw, phase, speed)``。
+
+    沒有紀錄時回空 dict（靜態情境本來就沒人在走），不丟例外。
+    """
+    import math
+    from collections import defaultdict
+
+    if not rows:
+        return {}
+    by_name = defaultdict(list)
+    for r in rows:
+        by_name[r.name].append(r)
+    out = {}
+    for name, rs in by_name.items():
+        rs.sort(key=lambda r: r.t)
+        if t <= rs[0].t:
+            r = rs[0]
+            out[name] = (r.x, r.y, r.yaw, r.phase, r.speed)
+            continue
+        if t >= rs[-1].t:
+            r = rs[-1]
+            out[name] = (r.x, r.y, r.yaw, r.phase, r.speed)
+            continue
+        lo, hi = 0, len(rs) - 1
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if rs[mid].t <= t:
+                lo = mid
+            else:
+                hi = mid
+        a, b = rs[lo], rs[hi]
+        span = b.t - a.t
+        u = 0.0 if span <= 0 else (t - a.t) / span
+        # 朝向也走短弧
+        dy = (b.yaw - a.yaw + math.pi) % (2 * math.pi) - math.pi
+        out[name] = (a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u,
+                     a.yaw + dy * u, _lerp_phase(a.phase, b.phase, u),
+                     a.speed + (b.speed - a.speed) * u)
+    return out

@@ -120,15 +120,18 @@ def test_wheel_distance_matches_vehicle_not_usd_default():
     assert drive.wheel_distance_m != 0.7
 
 
-def test_wheel_radius_is_mean_of_two_measured_diameters():
+def test_vehicle_wheel_radius_is_mean_of_two_measured_diameters():
     """driver_chgh.yaml: left 0.244211 / right 0.239577（左右不對稱 1.92%）。
 
     差速控制器只吃單一半徑，取兩者均值；不對稱本身由
     odom_drift_injector 的 e_d 參數建模，不在這裡處理。
+
+    ⚠ 2026-09-22 修正：這個常數是**實車**的標定輪徑。原本這支測試斷言
+    差動控制器也用它，那是錯的 —— Isaac 車模的輪子比實車大，
+    用實車值會讓模擬車快 9%（見 test_sim_wheel_radius_* 兩支）。
+    控制器實際用的是 SIM_WHEEL_RADIUS_M。
     """
-    drive = spec.DifferentialDriveSpec()
-    assert drive.wheel_radius_m == pytest.approx((0.244211 + 0.239577) / 4.0, abs=1e-12)
-    assert drive.wheel_radius_m != 0.134
+    assert spec.WHEEL_RADIUS_M == pytest.approx((0.244211 + 0.239577) / 4.0, abs=1e-12)
 
 
 def test_angular_speed_capped_at_chassis_limit():
@@ -230,3 +233,79 @@ def test_83d_profiles_have_matching_obs_spec(name):
 
 def test_default_profile_is_known():
     assert spec.DEFAULT_RL_PROFILE in spec.RL_PROFILES
+
+
+def test_sim_wheel_radius_is_not_the_vehicle_calibrated_one():
+    """★ Isaac 車模的輪子比實車大，差動控制器要用車模的有效滾動半徑。
+
+    2026-09-22 實測：控制器填實車標定值 0.120947 時，指令 0.600 m/s
+    車實際跑 0.663（直線滿速穩態比值 1.0901 ± 0.0256）。
+    「順手統一成實車值」會讓模擬車比實車快 9%，論文的秒數與相對速度全偏高。
+    """
+    from ros_graph_spec import SIM_WHEEL_RADIUS_M, WHEEL_RADIUS_M, DifferentialDriveSpec
+
+    assert SIM_WHEEL_RADIUS_M != WHEEL_RADIUS_M
+    assert DifferentialDriveSpec().wheel_radius_m == SIM_WHEEL_RADIUS_M
+    ratio = SIM_WHEEL_RADIUS_M / WHEEL_RADIUS_M
+    assert 1.05 < ratio < 1.15, f"比值 {ratio:.4f} 偏離實測的 1.0901 太多"
+
+
+def test_sim_wheel_radius_stays_under_the_geometric_radius():
+    """★ 有效滾動半徑必須小於輪子的幾何半徑（bbox 量到 0.1358）——
+    滑移與接觸壓縮只會讓它變小。大於幾何半徑代表值來源有問題。"""
+    from ros_graph_spec import SIM_WHEEL_RADIUS_M
+
+    WHEEL_GEOMETRIC_RADIUS_M = 0.1358      # USD 碰撞幾何 bbox 實測
+    assert SIM_WHEEL_RADIUS_M < WHEEL_GEOMETRIC_RADIUS_M
+    assert SIM_WHEEL_RADIUS_M > 0.9 * WHEEL_GEOMETRIC_RADIUS_M
+
+
+def test_no_character_walks_faster_than_the_cap():
+    """★ 2026-09-22 使用者指定行人最高 1.0 m/s。"""
+    from ros_graph_spec import DEFAULT_CHARACTER_WALKS, MAX_CHARACTER_SPEED_M_S
+
+    for w in DEFAULT_CHARACTER_WALKS:
+        assert w.speed <= MAX_CHARACTER_SPEED_M_S, f"{w.name} 速度 {w.speed} 超過上限"
+
+
+def _route_length(w):
+    import math
+    return sum(math.dist(w.waypoints[i], w.waypoints[i + 1])
+               for i in range(len(w.waypoints) - 1))
+
+
+def test_along_corridor_routes_are_long_enough():
+    """★ 使用者要求加大來回走路距離。沿走廊的三個人單程至少 10 m，
+    否則車跟他們只會在同一小段反覆遭遇，畫面與資料都沒有變化。"""
+    from ros_graph_spec import DEFAULT_CHARACTER_WALKS
+
+    along = [w for w in DEFAULT_CHARACTER_WALKS
+             if abs(w.waypoints[-1][0] - w.waypoints[0][0]) > 1.0]
+    assert len(along) >= 3
+    for w in along:
+        assert _route_length(w) >= 10.0, f"{w.name} 單程只有 {_route_length(w):.1f} m"
+
+
+def test_along_corridor_walkers_use_separate_lanes():
+    """★ 降低密度：沿走廊的人要分在不同 y 車道，不然會擠成一列。"""
+    from ros_graph_spec import DEFAULT_CHARACTER_WALKS
+
+    along = [w for w in DEFAULT_CHARACTER_WALKS
+             if abs(w.waypoints[-1][0] - w.waypoints[0][0]) > 1.0]
+    ys = sorted(sum(p[1] for p in w.waypoints) / len(w.waypoints) for w in along)
+    for a, b in zip(ys, ys[1:]):
+        assert b - a >= 0.3, f"車道 y={a:.2f} 與 y={b:.2f} 太靠近"
+
+
+def test_walk_periods_are_not_simple_multiples():
+    """★ 週期成整數倍的話幾個人會長期同步、又擠成一團。"""
+    from ros_graph_spec import DEFAULT_CHARACTER_WALKS
+
+    pers = sorted(2 * _route_length(w) / w.speed for w in DEFAULT_CHARACTER_WALKS)
+    for i in range(len(pers)):
+        for j in range(i + 1, len(pers)):
+            r = pers[j] / pers[i]
+            # 比值 ≈1 也算同步（兩人週期幾乎一樣，整段錄影都維持固定相對相位），
+            # 所以不放行 round(r)==1。
+            assert abs(r - round(r)) > 0.05, \
+                f"週期 {pers[i]:.2f}s 與 {pers[j]:.2f}s 成整數倍 {r:.3f}"
