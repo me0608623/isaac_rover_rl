@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from pathlib import Path
@@ -50,6 +51,31 @@ def main() -> int:
                     help="People 角色的光達可見性："
                          "parts=逐部位碰撞體（跟著骨架動畫擺動，預設）；"
                          "whole=整具一塊（凍結在 T-pose）；off=不套（看得到打不到）")
+    ap.add_argument("--record-dir", default="",
+                    help="錄三視角影片到這個目錄（PNG 序列，之後用 ffmpeg 編碼）。"
+                         "⚠ 算圖會拖慢模擬；policy 跑在牆鐘上，RTF<1 會讓每個"
+                         "模擬秒拿到比實車更多次決策，錄下的行為不代表真實表現。")
+    ap.add_argument("--record-width", type=int, default=1280)
+    ap.add_argument("--record-height", type=int, default=720)
+    ap.add_argument("--pose-log", default="",
+                    help="把車體的世界位姿逐幀寫成 CSV，供第二趟回放算圖用。"
+                         "錄影必須分兩趟：path tracing 會把 RTF 壓到 0.35，"
+                         "邊錄邊導航時 cmd_vel 被釘在 0.060 m/s（正常 0.475）"
+                         "根本到不了終點。見 pose_log 模組說明。")
+    ap.add_argument("--scenario", default="mixed",
+                    help="錄影情境：static=只有靜態障礙、行人站著；"
+                         "dynamic=只有走動的行人、關掉靜態障礙；"
+                         "mixed(預設)=兩者都有（已驗證過的正式組態）")
+    ap.add_argument("--record-spp", type=int, default=1,
+                    help="錄影用的 path tracing 每幀取樣數。1(預設)配 OptiX "
+                         "denoiser 實測就夠乾淨，且每幀 191 ms；4 要 714 ms、"
+                         "16 要 3.2 s，畫面亮度卻沒差。")
+    ap.add_argument("--record-every", type=int, default=1,
+                    help="frame_times.csv 的記帳間隔。⚠ **不會**減少實際輸出的"
+                         "張數 —— BasicWriter 掛上 render product 之後每個算圖"
+                         "幀都會自己寫檔（見 camera_recorder.step 的說明）。"
+                         "設 >1 只會讓 CSV 的幀號與檔名對不上，除非你知道自己"
+                         "在做什麼，否則保持 1。")
     ap.add_argument("--colliders-for", choices=("all", "walkers"), default="all",
                     help="哪些角色要有碰撞體。all(預設)=全部；walkers=只給會走路的。"
                          "⚠ 2026-09-21 曾預設 walkers，理由是「角色點雲污染 NDT」——"
@@ -69,9 +95,20 @@ def main() -> int:
                          "off=不動")
     args = ap.parse_args()
 
+    # 情境設定要在開 Isaac 之前就查好 —— 名字打錯要馬上報錯，
+    # 不要等 Isaac 起來兩分鐘之後才發現。
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from scenarios import scenario_config
+    scen = scenario_config(args.scenario)
+
     if not args.usd.exists():
         print(f"[run_isaac_sim] 找不到 USD: {args.usd}", file=sys.stderr)
         return 2
+
+    # Isaac 會把它不認得的 CLI 參數原封不動轉給底層的 Kit
+    # （啟動時會印 "Passing the following args to the base kit application"）。
+    # 參數在上面已經 parse 完了，別讓自家旗標流進 Kit 的設定解析。
+    sys.argv = sys.argv[:1]
 
     from isaacsim import SimulationApp
 
@@ -101,6 +138,13 @@ def main() -> int:
                    "omni.anim.graph.core", "omni.anim.graph.bundle",
                    "omni.anim.navigation.core", "isaacsim.replicator.agent.core"):
             enable_extension(_e)
+    # ⚠ omni.replicator.core 必須在**開 stage、起物理之前**就 import。
+    #   import 這個模組會順帶把 replicator 擴充與 SDG 算圖管線叫起來；
+    #   等到 sim.play() 之後才第一次 import（例如在 CameraRecorder 裡），
+    #   之後建立的 render product 算出來會是**全黑**。
+    #   2026-09-22 二分法實測：同一份 USD、同一段 A/B 程式碼、
+    #   carb 設定逐項比對完全相同，差別只在這行的位置 ——
+    #   先 import 亮度 47~54，後 import 一律 0.00。
     app.update()
 
     import omni.usd
@@ -112,6 +156,21 @@ def main() -> int:
         app.update()
     print("[run_isaac_sim] stage 載入完成")
 
+    # 情境：關掉靜態障礙就整個 prim 停用（SetActive(False) 會同時從算圖與
+    # 物理中移除，不必分別處理可見性與碰撞體）。
+    _obs_root = omni.usd.get_context().get_stage().GetPrimAtPath(
+        "/World/SimObstacles")
+    if _obs_root and _obs_root.IsValid():
+        _n_obs = 0
+        for _o in _obs_root.GetChildren():
+            _o.SetActive(scen.obstacles_enabled)
+            _n_obs += 1
+        print(f"[run_isaac_sim] 情境 {scen.name}：靜態障礙 {_n_obs} 個 "
+              f"{'啟用' if scen.obstacles_enabled else '停用'}"
+              f"　行人走動 {'開' if scen.walks_enabled else '關'}")
+
+    from pxr import Gf
+
     from isaacsim.core.api import SimulationContext
 
     sim = SimulationContext(physics_dt=1.0 / args.physics_hz,
@@ -119,6 +178,7 @@ def main() -> int:
                             stage_units_in_meters=1.0)
     sim.initialize_physics()
     sim.play()
+
 
     def _dump_poses(tag: str) -> None:
         """印出執行期的實際世界位姿。
@@ -260,14 +320,23 @@ def main() -> int:
 
         _root = _st.GetPrimAtPath("/World/Characters")
         _ok, _skipped, _walks = [], [], []
+        # 「太靠近車」的角色**整個停用**，不是只跳過碰撞體。
+        #   理由：不給碰撞體是因為 kinematic 角色等於無限質量，會把車彈飛；
+        #   但這種角色對感測是完全透明的（PhysX 光達只打碰撞體），
+        #   留著只會在車後視角裡變成一個貼在鏡頭前、擋住整台車的人 ——
+        #   而且因為不在驅動清單裡，他會一直停在綁定姿勢（T-pose）。
+        #   SetActive(False) 同時從算圖與物理移除，對光達/NDT 沒有任何影響。
+        _all_chars = []
         if _root and _root.IsValid():
             for _c in _root.GetChildren():
                 if _c.GetName() == "Biped_Setup":
                     continue
                 _t = _cache.GetLocalToWorldTransform(_c).ExtractTranslation()
                 if _rxy and too_close_to_robot((_t[0], _t[1]), _rxy):
-                    _skipped.append(_c.GetName())      # 無限質量會把車彈飛
+                    _skipped.append(_c.GetName())
+                    _c.SetActive(False)
                     continue
+                _all_chars.append(str(_c.GetPath()))
                 _ok.append(str(_c.GetPath()))
                 _walks.append((_c.GetName(),
                                [(_t[0], _t[1] + 4.0), (_t[0], _t[1] - 4.0)]))
@@ -313,7 +382,7 @@ def main() -> int:
                                                 approximation=args.part_approx)
                 _np += a; _nf += b
             print(f"[run_isaac_sim] 逐部位碰撞體：{len(_ok)} 人 / {_np} 部位 / {_nf} 面"
-                  + (f"　跳過(太靠近車) {_skipped}" if _skipped else ""))
+                  + (f"　停用(太靠近車、只會擋鏡頭) {_skipped}" if _skipped else ""))
         else:
             from character_colliders import apply_mesh_colliders
             n_c, n_m, sk = apply_mesh_colliders(_st, "/World/Characters", _rxy)
@@ -331,7 +400,8 @@ def main() -> int:
         from build_ros_graph import measure_corridor_floor_top
         _st2 = omni.usd.get_context().get_stage()
         walk_driver = CharacterWalkDriver(
-            _st2, _ok, walks=_S2.DEFAULT_CHARACTER_WALKS,
+            _st2, _all_chars,
+            walks=_S2.DEFAULT_CHARACTER_WALKS if scen.walks_enabled else (),
             floor_top=measure_corridor_floor_top(_st2))
         print(f"[run_isaac_sim] 程序化步態：{len(walk_driver)} 人 / "
               f"{walk_driver.segments_driven()} 個擺動關節 / "
@@ -340,6 +410,46 @@ def main() -> int:
         from character_parts import CharacterPartsDriver
         parts_driver = CharacterPartsDriver(omni.usd.get_context().get_stage(), _ok)
         print(f"[run_isaac_sim] 部位驅動器：{len(parts_driver)} 塊碰撞體")
+
+    recorder = None
+    if args.record_dir:
+        from camera_recorder import CameraRecorder
+        from build_ros_graph import measure_corridor_floor_top as _mcft
+        _st3 = omni.usd.get_context().get_stage()
+        # ⚠⚠ 錄影一定要用 **path tracing**。RTX Real-Time
+        #   （rendermode="RaytracedLighting"，Isaac 的預設）在這個場景算出來
+        #   **每一幀都是純 0**，跟光源、AA 模式、相機位置都無關：
+        #     2026-09-22 逐幀量測（1280x720、三視角、每組獨立輸出目錄）
+        #       rt   aa=3(DLSS) / 0(none) / 1(TAA) / 2(FXAA) → 全部 0
+        #       pt   spp=1  → 每幀 190，191 ms/幀
+        #       pt   spp=4  → 每幀 191，714 ms/幀
+        #       pt   spp=16 → 每幀 191，3222 ms/幀
+        #   spp 再高畫面亮度不變，所以 spp=1 + OptiX denoiser 就夠。
+        #
+        #   ⚠ 誤判紀錄：先前以為「重設 /rtx/rendermode 就會亮」，那是**量測
+        #     假象** —— 我取每組的最後 4 幀平均，而 path tracing 是累積式的，
+        #     40 幀裡只有最後一幀是完成品(190)，其餘 39 幀是 0，平均成 47.6
+        #     看起來像亮了。逐幀列印才看得到真相。量測方式錯，結論一定錯。
+        import carb
+        _sett = carb.settings.get_settings()
+        _sett.set("/rtx/pathtracing/spp", int(args.record_spp))
+        _sett.set("/rtx/pathtracing/totalSpp", int(args.record_spp))
+        _sett.set("/rtx/pathtracing/optixDenoiser/enabled", True)
+        _sett.set("/rtx/rendermode", "PathTracing")
+        recorder = CameraRecorder(_st3, args.record_dir, args.record_width,
+                                  args.record_height, args.record_every)
+        _rec_floor = _mcft(_st3)
+        print(f"[run_isaac_sim] 錄影：{len(recorder)} 視角 → {args.record_dir}"
+              f"  {args.record_width}x{args.record_height}"
+              f"  每 {args.record_every} tick 一幀")
+
+    pose_fp = None
+    if args.pose_log:
+        from pose_log import HEADER as _POSE_HEADER
+        Path(args.pose_log).parent.mkdir(parents=True, exist_ok=True)
+        pose_fp = open(args.pose_log, "w")
+        pose_fp.write(_POSE_HEADER + "\n")
+        print(f"[run_isaac_sim] 位姿軌跡 → {args.pose_log}")
 
     print(f"[run_isaac_sim] 開始模擬  physics={args.physics_hz} Hz  render={args.render_hz} Hz")
 
@@ -364,7 +474,48 @@ def main() -> int:
                 walk_driver.update(sim.current_time)   # 先把步態寫進骨架
             if parts_driver is not None:
                 parts_driver.update()                  # 部位再跟著骨架走
+            # ⚠ do_render 必須先算 —— 錄影區塊要用它。
+            #   2026-09-22 曾把錄影放在這行之前，第一次迭代就 NameError，
+            #   直接跳到 finally，錄出 0 幀而且沒有明顯錯誤訊息。
             do_render = render_every > 0 and steps % render_every == 0
+            if recorder is not None and do_render:
+                # ⚠ 錄影失敗不該讓整個模擬停擺，但**必須大聲**：
+                #   2026-09-22 兩次錄出 0 幀，因為例外被 finally 吞掉，
+                #   log 裡只看到「錄影結束：0 幀」，完全查不出原因。
+                try:
+                    from pxr import UsdGeom as _UG2
+                    _rb2 = omni.usd.get_context().get_stage().GetPrimAtPath(
+                        "/World/charger_rover4_5_0/charger_rover_urdf5/base_footprint")
+                    if _rb2 and _rb2.IsValid():
+                        _m2 = _UG2.XformCache().GetLocalToWorldTransform(_rb2)
+                        _t2 = _m2.ExtractTranslation()
+                        _r2 = _m2.ExtractRotation()
+                        _yaw2 = math.radians(
+                            _r2.Decompose(Gf.Vec3d(0, 0, 1), Gf.Vec3d(0, 1, 0),
+                                          Gf.Vec3d(1, 0, 0))[0])
+                        recorder.update_poses((_t2[0], _t2[1]), _yaw2, _rec_floor)
+                    recorder.step(sim.current_time)
+                except Exception:
+                    import traceback
+                    print("[run_isaac_sim] ⚠ 錄影失敗，停止錄影並繼續模擬：",
+                          flush=True)
+                    traceback.print_exc()
+                    recorder = None
+            if pose_fp is not None and do_render:
+                # 記 base_link（車體本身）的世界位姿。回放時把整台車的根節點
+                # 挪到「base_link 落在這個位姿」的地方即可。
+                from pxr import UsdGeom as _UG3
+                from pose_log import PoseSample as _PS, format_row as _fr
+                _pb = omni.usd.get_context().get_stage().GetPrimAtPath(
+                    "/World/charger_rover4_5_0/charger_rover_urdf5/base_link")
+                if _pb and _pb.IsValid():
+                    _mm = _UG3.XformCache().GetLocalToWorldTransform(_pb)
+                    _tt = _mm.ExtractTranslation()
+                    _qq = _mm.ExtractRotationQuat()
+                    _im = _qq.GetImaginary()
+                    pose_fp.write(_fr(_PS(
+                        sim.current_time, (_tt[0], _tt[1], _tt[2]),
+                        (_qq.GetReal(), _im[0], _im[1], _im[2]))) + "\n")
             sim.step(render=do_render)
             steps += 1
 
@@ -397,6 +548,12 @@ def main() -> int:
     except KeyboardInterrupt:
         print("[run_isaac_sim] 中斷")
     finally:
+        if pose_fp is not None:
+            pose_fp.close()
+            print(f"[run_isaac_sim] 位姿軌跡已寫入 {args.pose_log}")
+        if recorder is not None:
+            print(f"[run_isaac_sim] 錄影結束：{recorder.frames_written} 幀/視角")
+            recorder.close()
         sim.stop()
         app.close()
     return 0
