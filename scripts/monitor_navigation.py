@@ -34,6 +34,10 @@ def main() -> int:
     ap.add_argument("--start", default="c28", help="第一段的起點站名")
     ap.add_argument("--seconds", type=float, default=90.0, help="每段的逾時")
     ap.add_argument("--tag", default="", help="這次實驗的標籤，寫進 CSV 檔名")
+    ap.add_argument("--sim-time", action="store_true",
+                    help="逾時與耗時改用**模擬時間**（/clock）計。錄影時算圖會把"
+                         "RTF 壓到 0.35 左右，用牆鐘計時會把 54 s 的一段當成 "
+                         "154 s，跟先前驗證過的數字對不起來。")
     ap.add_argument("--log-dir", default="",
                     help="逐時刻記錄寫到這個目錄（每段一個 CSV）。彙總數字看不出"
                          "「在哪一段、因為什麼停下來」，要診斷就得有時間序列。")
@@ -63,9 +67,14 @@ def main() -> int:
     state = {"traj": [], "minrng": [], "cmd": [], "t": [], "vo": [],
              "mo": [], "series": []}
 
+    from rclpy.parameter import Parameter
+
     class Mon(Node):
         def __init__(self):
-            super().__init__("monitor_navigation")
+            overrides = ([Parameter("use_sim_time", Parameter.Type.BOOL, True)]
+                         if args.sim_time else [])
+            super().__init__("monitor_navigation",
+                             parameter_overrides=overrides)
             self.tf_buf = Buffer()
             self.tf_lis = TransformListener(self.tf_buf, self)
             self.create_subscription(PointCloud2, "/velodyne_points",
