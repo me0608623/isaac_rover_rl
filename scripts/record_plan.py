@@ -23,30 +23,41 @@ from pathlib import Path
 
 from scenarios import SCENARIO_NAMES
 
+#: 要錄的 RL 模型 profile。
+#:
+#: 取自車端 `deploy_select.sh` 的互動選單（= models/*.ts 排序後扣掉 HIDE_TS），
+#: **排除第一項** sa4_e2e_fs4_cleanppo_89600.ts —— 那顆在 sim 端沒有對應的
+#: profile（沒有配套的 policy / preprocessor yaml），而這些模型的觀測契約不同，
+#: 只換 model_path 而沿用別人的 yaml 會安靜地算出垃圾動作。
+#: 2026-09-22 使用者指定：選單上除第一項外的其他模型全部錄。
+DEFAULT_MODELS: tuple[str, ...] = ("sa4r2", "sa4r3", "sa5r2")
+
 #: 三個視角，順序固定（與 sim_cameras.CAMERAS 對應）。
 CAMERAS_IN_PLAN: tuple[str, ...] = ("topdown", "chase", "oblique")
 
 
-def run_tag(scenario: str, run_index: int) -> str:
+def run_tag(model: str, scenario: str, run_index: int) -> str:
     """一趟來回的唯一標籤。
 
+    模型放最前面：同一個模型的十二趟會排在一起，`ls` 出來就是分組的。
     零補位是刻意的：不補位的話 ``ls`` 會把 run10 排在 run2 前面，
     事後對剪影片與 bag 時很容易拿錯。
     """
-    return f"{scenario}_run{run_index:02d}"
+    return f"{model}_{scenario}_run{run_index:02d}"
 
 
 @dataclass(frozen=True)
 class RunSpec:
     """一趟來回要錄的東西。"""
 
+    model: str
     scenario: str
     run_index: int
     root: Path
 
     @property
     def tag(self) -> str:
-        return run_tag(self.scenario, self.run_index)
+        return run_tag(self.model, self.scenario, self.run_index)
 
     @property
     def run_dir(self) -> Path:
@@ -76,17 +87,20 @@ class RunSpec:
         return self.video_dir / f"{self.tag}_{camera}.mp4"
 
 
-def build_plan(runs_per_scenario: int, root) -> tuple[RunSpec, ...]:
-    """依情境分組產生整批計畫。
+def build_plan(runs_per_scenario: int, root, models=DEFAULT_MODELS) -> tuple[RunSpec, ...]:
+    """依 模型 → 情境 → 趟次 三層產生整批計畫。
 
-    情境放外層、趟次放內層：同一個情境的四趟連著跑，
-    中途若要停手，至少會有完整的一組情境可用。
+    模型放最外層、情境次之、趟次最內：同一個模型的整組連著跑完再換下一個。
+    中途若要停手，至少會有**完整的一個模型**可用，而不是三個模型各缺一半。
     """
     if runs_per_scenario < 1:
         raise ValueError(f"每個情境至少要一趟，收到 {runs_per_scenario}")
+    if not models:
+        raise ValueError("模型清單是空的")
     root = Path(root)
     return tuple(
-        RunSpec(scenario=s, run_index=i, root=root)
+        RunSpec(model=m, scenario=s, run_index=i, root=root)
+        for m in models
         for s in SCENARIO_NAMES
         for i in range(1, runs_per_scenario + 1)
     )

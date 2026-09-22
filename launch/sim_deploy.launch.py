@@ -294,6 +294,9 @@ def generate_launch_description() -> LaunchDescription:
         print(f"[sim_deploy] RL profile '{name}': {ckpt}")
         print(f"[sim_deploy]   policy yaml     = {policy_yaml}")
         print(f"[sim_deploy]   preprocess yaml = {preproc_yaml}")
+        print(f"[sim_deploy]   speed_rate      = "
+              + (f"{overrides['speed_rate']}（覆寫）" if "speed_rate" in overrides
+                 else "沿用 yaml 值"))
         return [
             Node(package="rover_rl_inference", executable="lidar_preprocessor",
                  name="rover_rl_lidar_preprocessor", output="log", condition=policy_on,

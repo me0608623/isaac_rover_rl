@@ -21,6 +21,10 @@ LEG_TIMEOUT=${LEG_TIMEOUT:-200}   # 每段逾時（模擬秒；monitor 用 --sim
 WIDTH=${WIDTH:-1280}
 HEIGHT=${HEIGHT:-720}
 FPS=${FPS:-30}
+#: 三個模型的 yaml 各有各的 speed_rate（sa4r2/sa4r3 0.6、sa5r2 0.7），
+#: 直接比會被速度上限混淆。2026-09-22 使用者指定**統一 0.7**。
+#: 走 launch 的覆寫參數，不動車端 yaml —— 那是實車契約，不該為了錄影改。
+SPEED_RATE=${SPEED_RATE:-0.7}
 BAG_TOPICS=(
     /clock /tf /tf_static
     /velodyne_points /filtered_points /ndt_points_map
@@ -51,19 +55,21 @@ PYTHONPATH="$WS/scripts" .venv/bin/python - "$RUNS" "$ROOT" > "$PLAN_FILE" <<'PY
 import sys
 from record_plan import build_plan
 for r in build_plan(int(sys.argv[1]), sys.argv[2]):
-    print(f"{r.scenario}\t{r.tag}")
+    print(f"{r.model}\t{r.scenario}\t{r.tag}\t{r.run_index}")
 PY
 if [ ! -s "$PLAN_FILE" ]; then say "⚠ 產不出計畫表，中止"; exit 2; fi
 say "計畫共 $(wc -l < "$PLAN_FILE") 趟來回 → $ROOT"
 
 # ── 第一遍：導航 + rosbag + 位姿 CSV ───────────────────────────────────
 pass_one () {
-    local SCEN="$1" TAG="$2" DIR="$3"
+    local MODEL="$1" SCEN="$2" TAG="$3" DIR="$4" IDX="$5"
     local BAG="$DIR/bag" NAV="$DIR/nav" POSE="$DIR/pose.csv"
+    local CROWD="$DIR/crowd.csv"
     cleanup_all
 
     say "  [1a] Isaac（不算圖，全速）"
-    nohup ./run_sim.sh --scenario "$SCEN" --pose-log "$POSE" \
+    nohup ./run_sim.sh --scenario "$SCEN" --run-index "$IDX" \
+          --pose-log "$POSE" --crowd-log "$CROWD" \
           > "$DIR/isaac_nav.log" 2>&1 &
     local pid=$! ok=0
     for _ in $(seq 1 80); do
@@ -77,12 +83,32 @@ pass_one () {
     . ./setup_sim_env.sh >/dev/null 2>&1
     . /home/aa/IsaacLab/rover_rl/install/setup.bash >/dev/null 2>&1
     nohup ros2 launch launch/sim_deploy.launch.py enable_rviz:=false \
+          rl_profile:="$MODEL" speed_rate:="$SPEED_RATE" \
           > "$DIR/stack.log" 2>&1 &
     for _ in $(seq 1 60); do
         timeout 5 ros2 topic list 2>/dev/null | grep -q '^/ndt_pose$' && break
         sleep 4
     done
     sleep 6
+    # ⚠ 一定要回頭確認**實際載入的**是哪一顆。只看自己傳了什麼參數，
+    #   profile 名打錯或 launch 預設沒吃到，會安靜地用預設模型錄完 12 趟。
+    local GOT
+    GOT=$(grep -m1 "RL profile" "$DIR/stack.log" 2>/dev/null)
+    case "$GOT" in
+        *"'$MODEL'"*) say "  [1b'] 模型確認：$GOT" ;;
+        *) say "  ⚠ 模型不符！要求 $MODEL，實際 ${GOT:-讀不到}"; return 1 ;;
+    esac
+
+    # ⚠ 同理要驗**實際生效**的 speed_rate，不是自己傳了什麼。
+    #   policy 會把它發在 /rover_rl_policy/status 裡，直接讀那個。
+    local SR
+    SR=$(timeout 25 ros2 topic echo --once /rover_rl_policy/status 2>/dev/null \
+         | grep -oP '"speed_rate":\s*\K[0-9.]+' | head -1)
+    case "$SR" in
+        "$SPEED_RATE") say "  [1b2] speed_rate 生效值：$SR" ;;
+        "") say "  ⚠ 讀不到 speed_rate 生效值（policy status 沒出來）"; return 1 ;;
+        *) say "  ⚠ speed_rate 不符！要求 $SPEED_RATE，實際 $SR"; return 1 ;;
+    esac
 
     say "  [1c] 初始位姿 c28"
     timeout 30 python3 scripts/publish_initial_pose.py --ros-args \
@@ -118,11 +144,12 @@ pass_one () {
 
 # ── 第二遍：回放算圖 + 編碼 ────────────────────────────────────────────
 pass_two () {
-    local SCEN="$1" TAG="$2" DIR="$3"
+    local SCEN="$1" TAG="$2" DIR="$3" IDX="$4"
+    # 第二遍不跑 ROS，模型與它無關（只照第一遍的位姿回放）。
     local FRAMES="$DIR/frames" VIDEO="$DIR/video"
     say "  [2a] 回放算圖（path tracing）"
-    ./replay.sh --pose-log "$DIR/pose.csv" --out "$FRAMES" \
-        --scenario "$SCEN" --fps "$FPS" \
+    ./replay.sh --pose-log "$DIR/pose.csv" --crowd-log "$DIR/crowd.csv" \
+        --out "$FRAMES" --scenario "$SCEN" --run-index "$IDX" --fps "$FPS" \
         --width "$WIDTH" --height "$HEIGHT" > "$DIR/replay.log" 2>&1
     grep -E "^\[replay\] (第一幀|完成|情境)" "$DIR/replay.log" | tee -a "$BATCH_LOG"
 
@@ -143,28 +170,39 @@ pass_two () {
 }
 
 run_one () {
-    local SCEN="$1" TAG="$2"
+    local MODEL="$1" SCEN="$2" TAG="$3" IDX="$4"
     local DIR="$ROOT/$TAG"
     if [ -s "$DIR/video/${TAG}_chase.mp4" ] && [ -f "$DIR/run.json" ]; then
         say "  $TAG 已完成，跳過"; return 0
     fi
-    say "════ $TAG（情境 $SCEN）════"
+    say "════ $TAG（模型 $MODEL／情境 $SCEN）════"
     rm -rf "$DIR"; mkdir -p "$DIR/bag" "$DIR/nav" "$DIR/video"
-    pass_one "$SCEN" "$TAG" "$DIR" || { say "  ⚠ $TAG 第一遍失敗，跳過"; cleanup_all; return 1; }
-    pass_two "$SCEN" "$TAG" "$DIR"
+    pass_one "$MODEL" "$SCEN" "$TAG" "$DIR" "$IDX" \
+        || { say "  ⚠ $TAG 第一遍失敗，跳過"; cleanup_all; return 1; }
+    pass_two "$SCEN" "$TAG" "$DIR" "$IDX"
 
-    PYTHONPATH="$WS/scripts" .venv/bin/python - "$DIR" "$SCEN" "$TAG" "$FPS" <<'PY'
+    PYTHONPATH="$WS/scripts" .venv/bin/python - "$DIR" "$SCEN" "$TAG" "$FPS" "$MODEL" "$SPEED_RATE" "$IDX" <<'PY'
 import json, sys
 from pathlib import Path
-d, scen, tag, fps = Path(sys.argv[1]), sys.argv[2], sys.argv[3], int(sys.argv[4])
+d, scen, tag, fps, model, srate = (Path(sys.argv[1]), sys.argv[2], sys.argv[3],
+                                   int(sys.argv[4]), sys.argv[5], float(sys.argv[6]))
 nav = (d / "nav.log").read_text(errors="replace") if (d / "nav.log").exists() else ""
 meta = {
-    "tag": tag, "scenario": scen, "fps": fps, "route": ["c28", "c25", "c28"],
+    "tag": tag, "model": model, "scenario": scen, "fps": fps,
+    "speed_rate": srate,
+    "route": ["c28", "c25", "c28"],
+    "model_loaded": next((l.strip() for l in
+                          (d / "stack.log").read_text(errors="replace").splitlines()
+                          if "RL profile" in l), None) if (d / "stack.log").exists() else None,
     "videos": sorted(p.name for p in (d / "video").glob("*.mp4")),
     "bag": sorted(p.name for p in (d / "bag").rglob("*.mcap")),
     "nav_csv": sorted(p.name for p in (d / "nav").glob("*.csv")),
     "pose_rows": sum(1 for _ in (d / "pose.csv").open()) - 1
                  if (d / "pose.csv").exists() else 0,
+    "crowd_rows": sum(1 for _ in (d / "crowd.csv").open()) - 1
+                  if (d / "crowd.csv").exists() else 0,
+    "crowd_mode": "orca",
+    "run_index": int(__import__("sys").argv[7]) if len(__import__("sys").argv) > 7 else 0,
     "nav_summary": [l.rstrip() for l in nav.splitlines()
                     if l.strip() and not l.startswith("[")],
     "note": ("兩遍錄製：第一遍全速導航並錄 rosbag/位姿，第二遍照位姿回放算圖。"
@@ -180,10 +218,10 @@ PY
 #   2026-09-22 踩過：ffmpeg 預設會把 stdin 整個吃掉，計畫表被讀光，
 #   12 趟只跑了第 1 趟就印「批次完成」，而且沒有任何錯誤訊息。
 #   ffmpeg 那邊也補了 -nostdin，兩道保險。
-while IFS=$'\t' read -r SCEN TAG <&3; do
+while IFS=$'\t' read -r MODEL SCEN TAG IDX <&3; do
     [ -z "$TAG" ] && continue
     if [ -n "${ONLY:-}" ] && [[ "$TAG" != *"$ONLY"* ]]; then continue; fi
-    run_one "$SCEN" "$TAG"
+    run_one "$MODEL" "$SCEN" "$TAG" "$IDX"
 done 3< "$PLAN_FILE"
 
 cleanup_all
