@@ -13,10 +13,26 @@ stage () { say "═══ $* ═══"; }
 
 say "夜間排程啟動"
 
-# ── 0. 等主批次 ───────────────────────────────────────────────────────
-stage "0/8 等主批次結束"
+# ── 0. 主批次 ─────────────────────────────────────────────────────────
+#
+# ⚠⚠ 2026-09-23：這一步原本**只會「等」**主批次，不會啟動它。於是直接
+#   `bash overnight.sh` 會在沒人跑主批次的情況下「等到 0 秒就結束」，
+#   對著空的 recordings/ 做完收尾分析（全部 0 趟、不報錯），然後直接跳去
+#   跑對照組 —— 主批次整個被跳過。改成沒在跑就自己啟動。
+stage "0/8 主批次"
+if pgrep -f "record_batch\.sh" >/dev/null 2>&1; then
+    say "  已有主批次在跑，等它結束"
+else
+    say "  沒有主批次在跑 → 現在啟動"
+    bash scripts/record_batch.sh >> "$WS/reports/abl_main.log" 2>&1 &
+    sleep 10
+fi
 while pgrep -f "record_batch\.sh" >/dev/null 2>&1; do sleep 120; done
-say "主批次已結束：$(ls -d "$WS"/recordings/*/ 2>/dev/null | grep -vc '_v[12]_') 趟"
+_N_MAIN=$(find "$WS/recordings" -name run.json -not -path '*/00_*' -not -path '*/_*' | wc -l)
+say "主批次已結束：$_N_MAIN 趟"
+if [ "$_N_MAIN" -lt 30 ]; then
+    say "  ⚠ 主批次只有 $_N_MAIN 趟（預期 36）—— 見 reports/abl_main.log"
+fi
 
 source "$WS/setup_sim_env.sh" >/dev/null 2>&1
 
