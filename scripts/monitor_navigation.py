@@ -28,9 +28,9 @@ ARRIVE_RADIUS_M = 1.0
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--legs", default="c25",
+    ap.add_argument("--legs", default="c27",
                     help="依序要去的 routing 站名，逗號分隔。"
-                         "例：c25,c28 = 去程 + 回程（來回對照）")
+                         "例：c27,c28 = 去程 + 回程（來回對照）")
     ap.add_argument("--start", default="c28", help="第一段的起點站名")
     ap.add_argument("--seconds", type=float, default=90.0, help="每段的逾時")
     ap.add_argument("--tag", default="", help="這次實驗的標籤，寫進 CSV 檔名")

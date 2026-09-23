@@ -125,8 +125,11 @@ def test_obstacles_stay_clear_of_the_route_nodes():
     2026-09-22 實跑踩到：ped_4_7 落在終點 c25 旁 1.25 m，而抵達判定半徑
     是 1.0 m，整段 FAIL —— 那是設定造成的，不是能力問題。
 
-    只檢查路線上的站（c28/c4/c26/c27/c25）。對全部 29 站要求淨空會讓
-    障礙排不下，而那些側室站點車不會去。
+    只檢查路線上的站。對全部 29 站要求淨空會讓障礙排不下，
+    而那些側室站點車不會去。
+
+    ⚠ 站名不要寫死：2026-09-23 路線由 c28↔c25 改成 c28↔c27，
+    原本這裡寫 `len(on_route) == 5` 就壞了。跟著 `ROUTE_WAYPOINTS` 走。
     """
     import math
 
@@ -134,7 +137,7 @@ def test_obstacles_stay_clear_of_the_route_nodes():
     from scene_variants import NODE_CLEARANCE_M, route_nodes
 
     on_route = route_nodes(S.read_station_nodes(S.ROUTING_STATION_JSON))
-    assert len(on_route) == 5
+    assert set(on_route) == set(S.ROUTE_WAYPOINTS)
     for run in (1, 2, 3, 4):
         for o in variant(run).obstacles:
             d = min(math.hypot(v[0] - o.map_x, v[1] - o.map_y)
@@ -210,3 +213,69 @@ def test_offset_is_perpendicular_to_the_centreline():
 def test_run_index_zero_is_rejected():
     with pytest.raises(ValueError):
         variant(0)
+
+
+def test_walker_starts_do_not_overlap():
+    """★★ 行人起點不可重疊。
+
+    2026-09-23 使用者回報「行人之間會互相穿透」。實測最小間距一律發生在
+    `sim_t=0.03s`（第一幀），數值正好等於這裡產生的起點距離
+    （run02 0.130 m、run03 0.206 m、run04 0.496 m，門檻是 2×0.30=0.60）。
+    不是 ORCA 壞了 —— ORCA 只保證「從不重疊的狀態開始」不會撞，
+    解不開一開始就重疊的狀態。
+    """
+    import math
+
+    from scene_variants import MIN_WALKER_START_GAP_M
+
+    for run in (1, 2, 3, 4):
+        v = variant(run)
+        starts = [w.waypoints[0] for w in v.walks]
+        for i in range(len(starts)):
+            for j in range(i + 1, len(starts)):
+                d = math.dist(starts[i], starts[j])
+                assert d >= MIN_WALKER_START_GAP_M, (
+                    f"run{run} 的 {v.walks[i].name} 與 {v.walks[j].name} "
+                    f"起點只差 {d:.3f} m")
+
+
+def test_walker_starts_are_clear_of_obstacles():
+    """★ 行人起點壓在障礙上，ORCA 的 agent 一開始就在 obstacle 裡面，
+    行為未定義（會被擠出去或直接穿過）。"""
+    import math
+
+    from scene_variants import MIN_WALKER_START_GAP_M
+
+    for run in (1, 2, 3, 4):
+        v = variant(run)
+        for w in v.walks:
+            for o in v.obstacles:
+                d = math.hypot(w.waypoints[0][0] - o.map_x,
+                               w.waypoints[0][1] - o.map_y)
+                assert d >= MIN_WALKER_START_GAP_M, (
+                    f"run{run} 的 {w.name} 起點離 {o.name} 只有 {d:.3f} m")
+
+
+def test_start_gap_check_uses_the_stored_rounded_coordinates():
+    """★★ 檢查要用**捨入後**的座標。waypoints 存小數 3 位，拿未捨入的值
+    檢查會讓剛好過門檻的那一對存成 0.8494（門檻 0.85）—— 等於檢查沒生效。
+    """
+    import math
+
+    from scene_variants import MIN_WALKER_START_GAP_M
+
+    v = variant(3)                  # run3 曾是 0.8494 那一組
+    starts = [w.waypoints[0] for w in v.walks]
+    for p in starts:
+        assert all(round(c, 3) == c for c in p), f"{p} 不是存下來的捨入值"
+    mn = min(math.dist(a, b) for i, a in enumerate(starts) for b in starts[i + 1:])
+    assert mn >= MIN_WALKER_START_GAP_M, mn
+
+
+def test_obstacles_keep_clear_of_the_far_end_goal():
+    """★ 終點由側邊的 c25 改成 spine 盡頭的 c27 之後，障礙上限若還是 s=16，
+    離終點只剩 1.03 m。OBSTACLE_S_RANGE 要留出 NODE_CLEARANCE_M。"""
+    from scene_variants import (NODE_CLEARANCE_M, OBSTACLE_S_RANGE,
+                                spine_length)
+
+    assert spine_length() - OBSTACLE_S_RANGE[1] >= NODE_CLEARANCE_M

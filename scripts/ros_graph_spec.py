@@ -429,8 +429,23 @@ class Obstacle:
     yaw_deg: float = 0.0
 
 
-#: 預設障礙物：沿 c28 → c25 這條展示路線佈置，讓車真的要閃避。
-#: c28 在 map (-0.058, +5.950)、c25 在 (-14.218, +5.377)，走廊沿 map -x 方向。
+#: 展示路線：從 ROUTE_START 出發、到 ROUTE_GOAL 折返回來（來回兩段）。
+#:
+#: 2026-09-23 由 c25 改成 **c27**。理由：障礙本來就是沿
+#: c28 → c4 → c26 → c27 這條走廊 spine 佈置的（`scene_variants.CORRIDOR_SPINE`），
+#: 而 c25 在 map (-14.218, +5.377) 是**側邊節點、不在 spine 上** ——
+#: 去程尾段會離開障礙帶。改到 c27 (-16.932, +3.588) 之後整條路線都貼著 spine，
+#: 車從頭到尾都要閃避，路線也長 19%（14.4 m → 17.0 m）。
+ROUTE_START = "c28"
+ROUTE_GOAL = "c27"
+
+#: 這條路線**實際依序經過**的 routing 站（從 RViz 的 routes_visualization 讀出）。
+#: 只有這幾個要對障礙要求淨空 —— 走廊上到處是車不會去的側室站點。
+ROUTE_WAYPOINTS: tuple[str, ...] = ("c28", "c4", "c26", "c27")
+
+
+#: 預設障礙物：沿 c28 → c27 這條展示路線佈置，讓車真的要閃避。
+#: c28 在 map (-0.058, +5.950)、c27 在 (-16.932, +3.588)，走廊沿 map -x 方向。
 DEFAULT_OBSTACLES: tuple[Obstacle, ...] = (
     Obstacle("person_a", -3.0, 6.3, "person"),
     Obstacle("person_b", -6.0, 5.4, "person"),

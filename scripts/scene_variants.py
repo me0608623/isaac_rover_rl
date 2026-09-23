@@ -50,7 +50,10 @@ CORRIDOR_SPINE: tuple[tuple[float, float], ...] = (
 #: 只避開出發點附近（路口、車的出生區）與最深處端點。
 #: ⚠ 2026-09-22 原本只用 2.5~15.0，使用者指出「走廊很長，應該可以平均放」——
 #:   縮在 12.5 m 裡放 6 個會變成連續 S 彎，不是走廊裡零星的障礙。
-OBSTACLE_S_RANGE = (2.0, 16.0)
+#: ⚠ 2026-09-23 路線終點由側邊的 c25 改成 spine 盡頭的 **c27**（s≈17.0）。
+#:   上限留在 16.0 的話障礙離終點只剩 1.03 m，違反 NODE_CLEARANCE_M=1.8，
+#:   `_place_clear_of_nodes` 會擺不下而丟例外。收到 14.5 保留 2.5 m 餘裕。
+OBSTACLE_S_RANGE = (2.0, 14.5)
 
 #: 肩並肩的一對「站著的人」：刻意封住走廊的**一側**，逼車走另一邊。
 #: 這比一長串左右交錯的單一障礙更接近真實走廊，也更能考驗繞行決策。
@@ -101,9 +104,15 @@ MIN_OBSTACLE_GAP_M = 2.2
 #: ⚠ 對全部 29 個 routing 站要求淨空是錯的：走廊上到處是側室站點
 #: （c1/c2/c5/c6/c9/c10…），1.8 m 淨空會讓障礙根本排不下。
 #: 那些站點車不會去，障礙擺旁邊不擋任何事。
-#: 這裡列的是錄到的 /global_path **實際依序經過**的站：
-#: c28（出發）→ c4 → c26 → c27，加上 c25（去程終點）。
-ROUTE_NODE_NAMES: tuple[str, ...] = ("c28", "c4", "c26", "c27", "c25")
+#: 這裡列的是錄到的 /global_path **實際依序經過**的站。
+#: 唯一定義在 `ros_graph_spec.ROUTE_WAYPOINTS`，不要在這裡另寫一份 ——
+#: 2026-09-23 路線由 c28↔c25 改成 c28↔c27，兩處各寫一份就會有一邊沒改到。
+def _route_node_names() -> tuple[str, ...]:
+    import ros_graph_spec as _S
+    return _S.ROUTE_WAYPOINTS
+
+
+ROUTE_NODE_NAMES: tuple[str, ...] = _route_node_names()
 
 #: 障礙與**路線上**站點的最小淨空（m）。
 #: ⚠ 2026-09-22 先用 0.9，實跑出問題：ped_4_7 落在終點 c25 旁 1.25 m，
@@ -111,6 +120,35 @@ ROUTE_NODE_NAMES: tuple[str, ...] = ("c28", "c4", "c26", "c27", "c25")
 #:   障礙擠在目標旁邊，車到不了是設定造成的，不是能力問題。
 #: 1.8 = 抵達半徑 1.0 + 車半徑 0.35 + 障礙半徑 0.3 + 餘裕。
 NODE_CLEARANCE_M = 1.8
+
+#: 障礙／站立人物與**任何一個** routing 站點的最小淨空（m）。
+#:
+#: ⚠ 2026-09-23 使用者要求「靜態行人不可以站在要導航的點位之 1.0 m 附近」。
+#: 實測 run4 的站立人物 `Character` 離 c2 只有 0.616 m。
+#: 1.0 = monitor_navigation.ARRIVE_RADIUS_M —— 抵達判定半徑內不該站人。
+#: 路線上的站另外要求更嚴的 NODE_CLEARANCE_M（1.8）；這條管的是**全部 29 站**，
+#: 因為那些側室站點雖然這次不走，換一條路線就會走到。
+ANY_NODE_CLEARANCE_M = 1.0
+
+
+#: 行人**起點**彼此（以及與障礙）的最小間距（m）。
+#:
+#: ⚠⚠ 2026-09-23 使用者回報「行人之間會互相穿透」。實測：最小間距一律發生在
+#: `sim_t=0.03s`（第一幀），數值正好等於這裡產生的起點距離
+#: （run02 0.130→0.160、run03 0.206→0.231、run04 0.496→0.521 m）。
+#: 不是 ORCA 壞了 —— ORCA 只保證「從不重疊的狀態開始」不會撞，
+#: **解不開一開始就重疊的狀態**。所以起點自己不能疊。
+#: 0.85 = 2 × 行人半徑 0.30 + 0.25 餘裕（第一步還會再靠近一點）。
+MIN_WALKER_START_GAP_M = 0.85
+
+#: 找不重疊起點的重抽次數。8 個人在 17 m 走廊裡要 0.85 m 間距很寬鬆，
+#: 抽不到就是設定有問題，要**大聲失敗**而不是放一個重疊的起點。
+MAX_START_ATTEMPTS = 60
+
+
+def _far_enough(p, others, gap: float) -> bool:
+    """``p`` 是否離 ``others`` 每一個都至少 ``gap``。"""
+    return all(math.dist(p, q) >= gap for q in others)
 
 
 def spine_length() -> float:
@@ -225,13 +263,25 @@ def _nearest_node_dist(p, stations) -> float:
     return min(math.hypot(v[0] - p[0], v[1] - p[1]) for v in stations.values())
 
 
-def _place_clear_of_nodes(s: float, lat: float, stations):
+def node_clearance_ok(p, on_route, all_nodes) -> bool:
+    """位置 ``p`` 是否同時滿足兩條淨空要求。
+
+    * 路線上的站：>= NODE_CLEARANCE_M（1.8）—— 車真的會去那裡停。
+    * **任何**站：>= ANY_NODE_CLEARANCE_M（1.0）—— 抵達半徑內不該站人。
+    """
+    return (_nearest_node_dist(p, on_route) >= NODE_CLEARANCE_M
+            and _nearest_node_dist(p, all_nodes) >= ANY_NODE_CLEARANCE_M)
+
+
+def _place_clear_of_nodes(s: float, lat: float, on_route, all_nodes=None):
     """把候選位置推離 routing 站點，**保留左右側別**（交錯不能被破壞）。
 
     先沿中心線前後挪（不改側別），再退而縮小側向距離。
     """
+    if all_nodes is None:
+        all_nodes = on_route
     base = offset_from_spine(s, lat)
-    if _nearest_node_dist(base, stations) >= NODE_CLEARANCE_M:
+    if node_clearance_ok(base, on_route, all_nodes):
         return base
     side = 1.0 if lat > 0 else -1.0
     s0, s1 = OBSTACLE_S_RANGE
@@ -241,13 +291,14 @@ def _place_clear_of_nodes(s: float, lat: float, stations):
             cs = max(s0, min(s1, s + ds))
             for mag in (abs(lat), 1.5, 1.6, 1.1, 0.85):
                 cand = offset_from_spine(cs, side * mag)
-                if _nearest_node_dist(cand, stations) >= NODE_CLEARANCE_M:
+                if node_clearance_ok(cand, on_route, all_nodes):
                     return cand
     # ⚠ 找不到就大聲報錯，不要默默把障礙擺在目標旁邊。
     #   2026-09-22 就是因為這裡靜靜回傳原值，ped_4_7 落在終點 c25 旁 1.25 m，
     #   整段導航 FAIL，而且要等跑完才看得出來。
     raise RuntimeError(
-        f"排不出離路線站點 {NODE_CLEARANCE_M} m 以上的障礙位置"
+        f"排不出同時離路線站點 {NODE_CLEARANCE_M} m、離任何站點 "
+        f"{ANY_NODE_CLEARANCE_M} m 以上的障礙位置"
         f"（弧長 {s:.2f}、側向 {lat:+.2f}）")
 
 
@@ -270,9 +321,9 @@ def variant(run_index: int, stations=None) -> SceneVariant:
         s_pair = raw[pair_idx[0]][0]
         ds_ok = 0.0
         for ds in (0.0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, 3.2, -3.2):
-            if all(_nearest_node_dist(
+            if all(node_clearance_ok(
                     offset_from_spine(max(0.0, s_pair + ds), raw[i][1]),
-                    on_route) >= NODE_CLEARANCE_M for i in pair_idx):
+                    on_route, stations) for i in pair_idx):
                 ds_ok = ds
                 break
         for i in pair_idx:
@@ -286,7 +337,7 @@ def variant(run_index: int, stations=None) -> SceneVariant:
             obs.append(Obstacle(f"pair_{run_index}_{i}", round(x, 3), round(y, 3),
                                 "person"))      # 並排的一定是兩個人
             continue
-        x, y = _place_clear_of_nodes(s, lat, on_route)
+        x, y = _place_clear_of_nodes(s, lat, on_route, stations)
         if n_single % 3 == 2:   # 零星障礙裡每三個有一個是推車（方箱）
             obs.append(Obstacle(f"box_{run_index}_{i}", round(x, 3), round(y, 3),
                                 "box", size_x=0.7, size_y=0.5, height=1.55))
@@ -297,21 +348,37 @@ def variant(run_index: int, stations=None) -> SceneVariant:
 
     n_walk = WALKER_COUNTS[k]
     walks = []
+    taken = [(o.map_x, o.map_y) for o in obs]      # 起點也不能壓在障礙上
     for i in range(n_walk):
         name = WALKER_POOL[i % len(WALKER_POOL)]
         spd = WALKER_SPEEDS[i % len(WALKER_SPEEDS)]
-        if i % 3 == 2:                       # 橫穿
-            s = rng.uniform(4.0, 13.0)
-            a = offset_from_spine(s, 1.6)
-            b = offset_from_spine(s, -1.6)
-        else:                                # 沿走廊
-            s0 = rng.uniform(1.0, 5.0)
-            s1 = s0 + rng.uniform(8.0, 14.0)
-            lat = rng.choice((0.75, -0.75, 1.15, -1.15))
-            a = offset_from_spine(s0, lat)
-            b = offset_from_spine(min(s1, spine_length() - 0.5), lat)
+        a = b = None
+        for _ in range(MAX_START_ATTEMPTS):
+            if i % 3 == 2:                   # 橫穿
+                s = rng.uniform(4.0, 13.0)
+                cand_a = offset_from_spine(s, 1.6)
+                cand_b = offset_from_spine(s, -1.6)
+            else:                            # 沿走廊
+                s0 = rng.uniform(1.0, 5.0)
+                s1 = s0 + rng.uniform(8.0, 14.0)
+                lat = rng.choice((0.75, -0.75, 1.15, -1.15))
+                cand_a = offset_from_spine(s0, lat)
+                cand_b = offset_from_spine(min(s1, spine_length() - 0.5), lat)
+            # ⚠ 要檢查**捨入後**的座標。waypoints 存的是小數 3 位，
+            #   拿未捨入的值檢查會讓 0.8500 存成 0.8494 —— 差一點點，
+            #   但那正是「剛好過門檻」的那一對，等於檢查沒生效。
+            cand_a = tuple(round(v, 3) for v in cand_a)
+            cand_b = tuple(round(v, 3) for v in cand_b)
+            if _far_enough(cand_a, taken, MIN_WALKER_START_GAP_M):
+                a, b = cand_a, cand_b
+                break
+        if a is None:
+            raise RuntimeError(
+                f"run{run_index} 第 {i} 個行人試了 {MAX_START_ATTEMPTS} 次都找不到"
+                f"離其他人/障礙 {MIN_WALKER_START_GAP_M} m 以上的起點")
+        taken.append(a)
         walks.append(CharacterWalk(
-            name, (tuple(round(v, 3) for v in a), tuple(round(v, 3) for v in b)),
+            name, (a, b),
             speed=spd, phase_s=round(rng.uniform(0.0, 12.0), 2)))
 
     # 站著的人：一個角色對應一個「人形障礙」，擺在同一個位置。

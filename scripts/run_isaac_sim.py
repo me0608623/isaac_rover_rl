@@ -373,8 +373,16 @@ def main() -> int:
                     _c.SetActive(False)
                     continue
                 # 站著的角色不得壓在 routing 站點上（會擋住導航目標）。
-                # 會走的角色不適用 —— 它們的路線本來就沿走廊、必然經過站點。
-                if _c.GetName() not in _walk_names0:
+                # 會走的角色**在真的會走的時候**不適用 —— 它們的路線本來就沿
+                # 走廊、必然經過站點，只是路過不是佔住。
+                #
+                # ⚠⚠ 2026-09-23：原本無條件豁免 `_walk_names0`，但 `static`
+                #   情境 walks_enabled=False，那些角色是**停在 USD 原位不動的**，
+                #   等於靜態行人。實測 Character_11 停在路線站 c26 旁 0.709 m、
+                #   Character_13 停在新終點 c27 旁 0.995 m —— 抵達半徑就是 1.0 m，
+                #   static 那幾趟會到不了終點。所以豁免要看 walks_enabled。
+                _will_walk = scen.walks_enabled and _c.GetName() in _walk_names0
+                if not _will_walk:
                     _mx, _my, _ = _S0.world_to_map(_t[0], _t[1], 0.0)
                     if too_close_to_routing_node((_mx, _my), _stations):
                         _nn, _nd = nearest_routing_node((_mx, _my), _stations)
@@ -471,12 +479,31 @@ def main() -> int:
             walks=(_sv.walks if _sv is not None else _S2.DEFAULT_CHARACTER_WALKS)
                   if scen.walks_enabled else (),
             floor_top=measure_corridor_floor_top(_st2))
-        # 站立的人物擺到「人形障礙」的位置（圓柱不可見、只當碰撞體）
+        # 站立的人物擺到「人形障礙」的位置（圓柱不可見、只當碰撞體）。
+        #
+        # ⚠⚠ 2026-09-23：障礙關閉時（dynamic）要把這些角色**整個停用**，
+        #   不是擺位。原本不看 scen.obstacles_enabled，於是 dynamic 印
+        #   「靜態障礙 0/18 啟用」卻仍有 3~5 個站著不動的人形障礙 ——
+        #   dynamic 與 mixed 的靜態內容因此幾乎相同（第1、2趟完全一樣），
+        #   「有/沒有靜態障礙」的對比根本不成立。
+        #   只是不擺位也不行：那些角色會留在 USD 原位，而 Character_10~13、19
+        #   的原位就在走廊中線上，照樣擋路。必須 SetActive(False)。
         _n_place = 0
+        _n_off = 0
+        _standing_now = []
         if _sv is not None:
             for _p in _sv.standing:
+                if not scen.obstacles_enabled:
+                    _pp = _st2.GetPrimAtPath(f"/World/Characters/{_p.name}")
+                    if _pp and _pp.IsValid():
+                        _pp.SetActive(False)
+                        _n_off += 1
+                    continue
                 if walk_driver.place_standing(_p.name, (_p.map_x, _p.map_y), _p.yaw):
                     _n_place += 1
+                    _standing_now.append((_p.map_x, _p.map_y))
+        if _n_off:
+            print(f"[run_isaac_sim] 停用(障礙關閉，站立人物不該存在) {_n_off} 個")
         # 其餘站著的人降到地板（USD 原本懸空 17~20 cm）
         _n_ground = walk_driver.ground_standing()
         print(f"[run_isaac_sim] 程序化步態：{len(walk_driver)} 人 / "
@@ -487,12 +514,27 @@ def main() -> int:
     if (args.crowd_mode == "orca" and walk_driver is not None
             and scen.walks_enabled):
         from orca_crowd import OrcaCrowd, ccw_rect
+        # ⚠⚠ 2026-09-23 使用者回報「走動行人會穿過站著的人」。實測 dynamic 那
+        #   12 趟最近距離低到 0.001 m、37~60% 的幀都在重疊。原因：這裡只在
+        #   `obstacles_enabled` 時才餵障礙給 ORCA，dynamic 餵 0 個，
+        #   於是走動行人根本不知道那些站著的人存在。
+        #   判準改成「**場上實際有什麼**」：站立人物擺了就餵（_standing_now），
+        #   不管圓柱有沒有啟用。
         _obs = []
+        _obs_at = []                     # 每個矩形的中心，用來去重
         if scen.obstacles_enabled:
             for _o in (_sv.obstacles if _sv is not None else _S2.DEFAULT_OBSTACLES):
                 _hx = (_o.size_x / 2.0 if _o.kind == "box" else 0.25)
                 _hy = (_o.size_y / 2.0 if _o.kind == "box" else 0.25)
                 _obs.append(ccw_rect(_o.map_x, _o.map_y, _hx + 0.15, _hy + 0.15))
+                _obs_at.append((_o.map_x, _o.map_y))
+        # 保險：站立人物一律要在 ORCA 的世界裡，即使某天障礙圓柱與站立人物
+        # 不再一對一。去重要比**中心**，不是矩形的某個頂點。
+        for _sx, _sy in _standing_now:
+            if not any(math.hypot(_sx - _cx, _sy - _cy) < 0.30
+                       for _cx, _cy in _obs_at):
+                _obs.append(ccw_rect(_sx, _sy, 0.40, 0.40))
+                _obs_at.append((_sx, _sy))
         # 走廊兩側牆：擋住行人被 ORCA 推出走廊（走廊約 map y∈[3,8]）
         _walls = (ccw_rect(-10.0, 2.3, 14.0, 0.3),
                   ccw_rect(-10.0, 8.7, 14.0, 0.3))

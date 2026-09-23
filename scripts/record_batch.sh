@@ -16,6 +16,12 @@ cd "$(dirname "$0")/.." || exit 1
 WS=$PWD
 
 ROOT=${ROOT:-$WS/recordings}
+# 路線的唯一定義在 scripts/ros_graph_spec.py（ROUTE_START / ROUTE_GOAL）。
+# ⚠ 不要在這裡寫死站名：2026-09-23 由 c28↔c25 改成 c28↔c27，
+#   當時 legs / 提示訊息 / run.json 各寫一份，很容易有一處沒改到。
+read -r R_START R_GOAL <<<"$(PYTHONPATH="$WS/scripts" "$WS/.venv/bin/python" -c \
+    "import ros_graph_spec as S; print(S.ROUTE_START, S.ROUTE_GOAL)")"
+[ -n "$R_START" ] && [ -n "$R_GOAL" ] || { echo "⚠ 讀不到路線設定，中止"; exit 2; }
 RUNS=${RUNS:-4}
 LEG_TIMEOUT=${LEG_TIMEOUT:-200}   # 每段逾時（模擬秒；monitor 用 --sim-time）
 WIDTH=${WIDTH:-1280}
@@ -124,9 +130,9 @@ pass_one () {
           "${BAG_TOPICS[@]}" > "$DIR/bag.log" 2>&1 &
     sleep 4
 
-    say "  [1e] 導航 c28 → c25 → c28"
+    say "  [1e] 導航 $R_START → $R_GOAL → $R_START"
     timeout 2400 python3 scripts/monitor_navigation.py \
-        --legs c25,c28 --start c28 --sim-time --seconds "$LEG_TIMEOUT" \
+        --legs "$R_GOAL,$R_START" --start "$R_START" --sim-time --seconds "$LEG_TIMEOUT" \
         --log-dir "$NAV" --tag "$TAG" 2>&1 \
         | grep -vE "^\[WARN\]|deprecated|localhost" > "$DIR/nav.log"
     sed -n '/^段  /,$p' "$DIR/nav.log" | head -5 | tee -a "$BATCH_LOG"
@@ -193,7 +199,7 @@ run_one () {
         || { say "  ⚠ $TAG 第一遍失敗，跳過"; cleanup_all; return 1; }
     pass_two "$SCEN" "$TAG" "$DIR" "$IDX"
 
-    PYTHONPATH="$WS/scripts" .venv/bin/python - "$DIR" "$SCEN" "$TAG" "$FPS" "$MODEL" "$SPEED_RATE" "$IDX" <<'PY'
+    PYTHONPATH="$WS/scripts" .venv/bin/python - "$DIR" "$SCEN" "$TAG" "$FPS" "$MODEL" "$SPEED_RATE" "$IDX" "$R_START" "$R_GOAL" <<'PY'
 import json, sys
 from pathlib import Path
 d, scen, tag, fps, model, srate = (Path(sys.argv[1]), sys.argv[2], sys.argv[3],
@@ -202,7 +208,8 @@ nav = (d / "nav.log").read_text(errors="replace") if (d / "nav.log").exists() el
 meta = {
     "tag": tag, "model": model, "scenario": scen, "fps": fps,
     "speed_rate": srate,
-    "route": ["c28", "c25", "c28"],
+    # argv: 1=DIR 2=SCEN 3=TAG 4=FPS 5=MODEL 6=SPEED_RATE 7=IDX 8=起點 9=終點
+    "route": [sys.argv[8], sys.argv[9], sys.argv[8]],
     "model_loaded": next((l.strip() for l in
                           (d / "stack.log").read_text(errors="replace").splitlines()
                           if "RL profile" in l), None) if (d / "stack.log").exists() else None,
@@ -239,4 +246,4 @@ done 3< "$PLAN_FILE"
 cleanup_all
 # ⚠ 數目錄要數 run.json，不能數 "$ROOT"/*/ —— 各趟在模型子資料夾底下，
 #   數頂層只會得到「3 個模型」，看起來像只跑了 3 趟。
-say "════ 批次完成：$(find "$ROOT" -name run.json -not -path '*/00_*' | wc -l) 趟，$(find "$ROOT" -name '*.mp4' | wc -l) 段影片 ════"
+say "════ 批次完成：$(find "$ROOT" -name run.json -not -path '*/00_*' -not -path '*/_*' | wc -l) 趟，$(find "$ROOT" -name '*.mp4' | wc -l) 段影片 ════"
