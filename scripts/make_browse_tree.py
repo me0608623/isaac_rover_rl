@@ -26,11 +26,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from browse_names import ARM_DIR, ARM_ZH, CAMERA_ZH, run_label, video_name
-from run_layout import BROWSE_DIRNAME, run_dirs
+from run_layout import (BROWSE_DIRNAME, MODEL_DIR_PREFIX,
+                        model_dir_name, run_dirs)
 from scene_counts import counts_from_log
 
 MAIN_DIRNAME = "01_主批次_三模型正式錄影"
 RAW_DIRNAME = "05_每趟原始資料_bag與CSV"
+
+#: 每個模型資料夾裡**再放一份**自己的中文影片索引。
+#: 理由：使用者會直接點進 `recordings/模型sa4r2/`，而那底下是 12 個英文
+#: tag 資料夾（tag 不能改名，見 `browse_names` 檔頭）。在原地給一份中文索引，
+#: 走到哪裡都看得懂。兩處由**同一支程式**產生，不會走樣。
+MODEL_INDEX_DIRNAME = "00_中文影片"
 
 
 def _counts(run_dir: Path):
@@ -68,6 +75,10 @@ def build(root: Path, arm_roots: dict[str, Path]) -> dict[str, int]:
 
     n = 0
     unknown = []
+    for mdir in sorted(root.glob(f"{MODEL_DIR_PREFIX}*")):
+        stale = mdir / MODEL_INDEX_DIRNAME
+        if stale.exists():
+            shutil.rmtree(stale)          # 同樣整個重建，不留孤兒連結
     for run_dir, meta in _runs(root):
         scen, idx = meta["scenario"], int(meta.get("run_index", 0))
         cnt = _counts(run_dir)
@@ -79,8 +90,10 @@ def build(root: Path, arm_roots: dict[str, Path]) -> dict[str, int]:
             cam = mp4.stem.rsplit("_", 1)[-1]
             if cam not in CAMERA_ZH:
                 continue
-            _link(mp4, browse / MAIN_DIRNAME / f"模型{model}"
-                  / video_name(scen, idx, cam, cnt, mode))
+            zh = video_name(scen, idx, cam, cnt, mode)
+            _link(mp4, browse / MAIN_DIRNAME / f"模型{model}" / zh)
+            # 原地再放一份：使用者會直接點進 recordings/模型xxx/
+            _link(mp4, root / model_dir_name(model) / MODEL_INDEX_DIRNAME / zh)
             n += 1
         _link(run_dir, browse / RAW_DIRNAME
               / f"模型{model}_{run_label(scen, idx, cnt, mode)}")
@@ -120,6 +133,10 @@ def main() -> int:
         print(f"  {k:28s} {v:4d} 個影片連結")
     print(f"  合計 {total} 個影片連結"
           f" + {len(_runs(root))} 個原始資料夾連結")
+    for mdir in sorted(root.glob(f"{MODEL_DIR_PREFIX}*")):
+        k = len(list((mdir / MODEL_INDEX_DIRNAME).glob("*.mp4"))) \
+            if (mdir / MODEL_INDEX_DIRNAME).is_dir() else 0
+        print(f"  {mdir.name}/{MODEL_INDEX_DIRNAME}  {k:4d} 個（原地索引）")
     if total == 0:
         print("⚠ 一個連結都沒建 —— 檢查 root 路徑", file=sys.stderr)
         return 1

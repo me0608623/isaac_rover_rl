@@ -126,3 +126,50 @@ def test_missing_log_is_labelled_unknown_not_zero(tmp_path):
     names = [p.name for p in
              (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2").iterdir()]
     assert all("數量不明" in n for n in names), names
+
+
+def test_each_model_folder_gets_its_own_chinese_index(tmp_path):
+    """★ 使用者會直接點進 `recordings/模型sa4r2/`，而那底下是英文 tag
+    資料夾。原地要有一份中文索引，不然走進去就看不懂。"""
+    from make_browse_tree import MODEL_INDEX_DIRNAME
+
+    root = tmp_path / "rec"
+    (root / "模型sa4r2").mkdir(parents=True)
+    _mk_run(root / "模型sa4r2", "sa4r2_mixed_run04", "mixed", 4)
+    build(root, {})
+    got = sorted(p.name for p in
+                 (root / "模型sa4r2" / MODEL_INDEX_DIRNAME).iterdir())
+    assert got == ["混合_ORCA互動_第4趟_靜6動8_俯視.mp4",
+                   "混合_ORCA互動_第4趟_靜6動8_斜前方.mp4",
+                   "混合_ORCA互動_第4趟_靜6動8_車後.mp4"]
+
+
+def test_model_index_is_not_mistaken_for_a_run(tmp_path):
+    """★★ 原地索引就放在模型資料夾裡，`run_dirs` 不能把它當成一趟，
+    也不能跟著裡面的連結把同一趟算兩次。"""
+    from run_layout import run_dirs
+
+    root = tmp_path / "rec"
+    (root / "模型sa4r2").mkdir(parents=True)
+    _mk_run(root / "模型sa4r2", "sa4r2_mixed_run04", "mixed", 4)
+    build(root, {})
+    assert [p.name for p in run_dirs(root)] == ["sa4r2_mixed_run04"]
+
+
+def test_model_index_is_rebuilt_not_appended(tmp_path):
+    """★ 改名後舊連結要消失，否則同一趟在原地索引裡出現兩個名字。"""
+    from make_browse_tree import MODEL_INDEX_DIRNAME
+
+    root = tmp_path / "rec"
+    (root / "模型sa4r2").mkdir(parents=True)
+    d = _mk_run(root / "模型sa4r2", "sa4r2_mixed_run04", "mixed", 4)
+    build(root, {})
+    idx = root / "模型sa4r2" / MODEL_INDEX_DIRNAME
+    assert len(list(idx.iterdir())) == 3
+    (d / "isaac_nav.log").write_text(
+        "[run_isaac_sim] 情境 mixed／變體 run4：靜態障礙 3/18 啟用　行人走動 開\n"
+        "[run_isaac_sim] 程序化步態：5 人 / 40 個擺動關節 / 2 人沿路徑移動"
+        "　站立人物擺位 3 個　腳底對地 3 個\n")
+    build(root, {})
+    got = sorted(p.name for p in idx.iterdir())
+    assert len(got) == 3 and all("靜3動2" in g for g in got), got
