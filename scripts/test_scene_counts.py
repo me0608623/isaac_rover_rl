@@ -75,3 +75,13 @@ def test_new_log_format_with_route_and_parked_walkers():
     info = parse_log(log)
     assert info["scenario"] == "static" and info["run_index"] == 4
     assert counts_from_log(log) == (12, 0)
+
+
+def test_characters_disabled_after_the_driver_are_not_counted():
+    """★ dynamic：「程序化步態：4 人」含 2 個建好驅動器後才停用的站立人物，
+    實際場上只有 2 個走動的人（scene.json 為證），靜態應為 0 不是 2。"""
+    log = ("[run_isaac_sim] 情境 dynamic／路線 c27／變體 run1：靜態障礙 0/36 啟用　行人走動 開\n"
+           "[run_isaac_sim] 停用(障礙關閉，站立人物不該存在) 2 個\n"
+           "[run_isaac_sim] 程序化步態：4 人 / 32 個擺動關節 / 2 人沿路徑移動"
+           "　站立人物擺位 0 個　停放行人 0 個　腳底對地 2 個\n")
+    assert counts_from_log(log) == (0, 2)

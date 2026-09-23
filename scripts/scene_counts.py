@@ -23,6 +23,10 @@ import re
 
 # 路線欄位是 2026-09-23 加的（「情境 static／路線 c27／變體 run4」），舊 log 沒有
 _SCENE = re.compile(r"情境 (\w+)／(?:路線 \w+／)?變體 run(\d+)：靜態障礙 (\d+)/(\d+) 啟用")
+# 驅動器建好**之後**才停用的角色：「程序化步態：N 人」的 N 仍含他們。
+# 這行只在 N>0 時印，讀不到就是 0（不是缺資料）。
+_OFF_LATE = re.compile(r"停用\(障礙關閉，站立人物不該存在\) (\d+) 個")
+_PARK_FAIL = re.compile(r"⚠ 停放失敗 ")
 _GAIT = re.compile(
     r"程序化步態：(\d+) 人 / \d+ 個擺動關節 / (\d+) 人沿路徑移動"
     r"\s*站立人物擺位 (\d+) 個")
@@ -42,7 +46,10 @@ def parse_log(text: str):
         "scenario": m1.group(1),
         "run_index": int(m1.group(2)),
         "obstacles_enabled": int(m1.group(3)),
-        "chars": int(m2.group(1)),
+        # ⚠ 2026-09-24 dynamic 被誤判成「靜2」：4 人裡有 2 個是事後停用的站立人物
+        "chars": (int(m2.group(1))
+                  - sum(int(x) for x in _OFF_LATE.findall(text))
+                  - len(_PARK_FAIL.findall(text))),
         "walking": int(m2.group(2)),
         "standing": int(m2.group(3)),
     }
