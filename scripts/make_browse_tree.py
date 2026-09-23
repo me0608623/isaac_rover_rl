@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -53,12 +54,43 @@ def _counts(run_dir: Path):
     return counts_from_log(log.read_text(errors="replace"))
 
 
+#: 這支程式產生的區塊都以「兩位數字 + _」開頭（`01_主批次…`、`00_中文影片`）。
+#: 重建時只清這些，**使用者自己開的資料夾一律保留** ——
+#: 2026-09-23 使用者在 `00_影片總覽/` 裡開了 `上傳/` 放要給人的片子，
+#: 原本的 `shutil.rmtree(browse)` 下次重建就會把它整個刪掉。
+_MANAGED = re.compile(r"^\d\d_")
+
+
+def _clear_managed(parent: Path) -> None:
+    """清掉 ``parent`` 底下由這支程式產生的區塊，其餘不動。"""
+    if not parent.is_dir():
+        return
+    for child in sorted(parent.iterdir()):
+        if child.is_dir() and not child.is_symlink() and _MANAGED.match(child.name):
+            shutil.rmtree(child)
+
+
 def _link(target: Path, link: Path) -> None:
-    """建相對路徑的符號連結（整個 recordings/ 搬走也不會斷）。"""
+    """影片用 **hard link**，資料夾用相對符號連結。
+
+    ⚠ 影片曾經也用符號連結，結果使用者在檔案總管裡把它複製到別的資料夾之後
+    「打不開」—— 複製出來的還是捷徑，而捷徑裡寫的是相對路徑
+    （`../../../模型sa4r2/...`），換了層數就指到不存在的地方。
+    hard link 在檔案總管裡就是一個普通檔案：複製它 = 複製真內容，
+    而且和本體共用同一份資料、不佔額外空間。
+
+    跨檔案系統時 hard link 會失敗（例如索引放在別顆硬碟），那時退回符號連結。
+    """
     link.parent.mkdir(parents=True, exist_ok=True)
     if link.is_symlink() or link.exists():
         link.unlink()
-    link.symlink_to(os.path.relpath(target.resolve(), link.parent.resolve()))
+    if target.is_dir():
+        link.symlink_to(os.path.relpath(target.resolve(), link.parent.resolve()))
+        return
+    try:
+        os.link(target, link)
+    except OSError:
+        link.symlink_to(os.path.relpath(target.resolve(), link.parent.resolve()))
 
 
 def _runs(root: Path):
@@ -69,16 +101,13 @@ def _runs(root: Path):
 def build(root: Path, arm_roots: dict[str, Path]) -> dict[str, int]:
     """重建索引樹，回傳 ``{區塊: 連結數}``。"""
     browse = root / BROWSE_DIRNAME
-    if browse.exists():
-        shutil.rmtree(browse)                 # 整棵重建：改名後不留孤兒連結
+    _clear_managed(browse)
     stats: dict[str, int] = {}
 
     n = 0
     unknown = []
     for mdir in sorted(root.glob(f"{MODEL_DIR_PREFIX}*")):
-        stale = mdir / MODEL_INDEX_DIRNAME
-        if stale.exists():
-            shutil.rmtree(stale)          # 同樣整個重建，不留孤兒連結
+        _clear_managed(mdir)
     for run_dir, meta in _runs(root):
         scen, idx = meta["scenario"], int(meta.get("run_index", 0))
         cnt = _counts(run_dir)

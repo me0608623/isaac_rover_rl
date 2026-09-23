@@ -38,18 +38,23 @@ def test_build_links_every_video(tmp_path):
                    "混合_ORCA互動_第4趟_靜6動8_車後.mp4"]
 
 
-def test_links_are_relative_and_resolve(tmp_path):
-    """★ 絕對路徑的連結在 recordings/ 被搬走或掛到別台之後全部斷掉。"""
+def test_directory_links_are_relative_and_resolve(tmp_path):
+    """★ 資料夾只能用符號連結（hard link 不能指資料夾），而且要用相對路徑 ——
+    絕對路徑在 recordings/ 被搬走或掛到別台之後全部斷掉。
+
+    影片不走這條路：影片是 hard link，見
+    `test_video_entries_are_real_files_not_shortcuts`。
+    """
     root = tmp_path / "rec"
     root.mkdir()
     _mk_run(root, "sa4r2_static_run01", "static", 1, obstacles=3,
             chars=5, walking=0, standing=3)
     build(root, {})
-    link = (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2"
-            / "純靜態_不走動_第1趟_靜5動0_俯視.mp4")
+    link = (root / BROWSE_DIRNAME / RAW_DIRNAME
+            / "模型sa4r2_純靜態_不走動_第1趟_靜5動0")
     assert link.is_symlink()
     assert not os.path.isabs(os.readlink(link))
-    assert link.resolve().read_text() == "x"
+    assert link.resolve().name == "sa4r2_static_run01"
 
 
 def test_raw_data_link_points_at_the_run_directory(tmp_path):
@@ -173,3 +178,63 @@ def test_model_index_is_rebuilt_not_appended(tmp_path):
     build(root, {})
     got = sorted(p.name for p in idx.iterdir())
     assert len(got) == 3 and all("靜3動2" in g for g in got), got
+
+
+def test_video_entries_are_real_files_not_shortcuts(tmp_path):
+    """★★ 影片必須是 hard link（在檔案總管裡就是普通檔案）。
+
+    2026-09-23 使用者把索引裡的影片複製到 `00_影片總覽/上傳/` 之後打不開：
+    複製出來的還是捷徑，而捷徑寫的是相對路徑，換了層數就指到不存在的地方。
+    """
+    root = tmp_path / "rec"
+    root.mkdir()
+    _mk_run(root, "sa4r2_mixed_run04", "mixed", 4)
+    build(root, {})
+    link = (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2"
+            / "混合_ORCA互動_第4趟_靜6動8_俯視.mp4")
+    assert not link.is_symlink(), "影片不可以是符號連結"
+    assert link.is_file() and link.read_text() == "x"
+    assert link.stat().st_nlink >= 2, "應與本體共用同一個 inode"
+
+
+def test_copying_a_video_elsewhere_still_opens(tmp_path):
+    """★★ 直接重現使用者的操作：複製到另一個深度不同的資料夾後要還能開。"""
+    import shutil as _sh
+
+    root = tmp_path / "rec"
+    root.mkdir()
+    _mk_run(root, "sa4r2_mixed_run04", "mixed", 4)
+    build(root, {})
+    src = (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2"
+           / "混合_ORCA互動_第4趟_靜6動8_俯視.mp4")
+    dest_dir = root / BROWSE_DIRNAME / "上傳"
+    dest_dir.mkdir()
+    _sh.copy(src, dest_dir / src.name)       # 檔案總管的「複製」
+    assert (dest_dir / src.name).read_text() == "x"
+
+
+def test_rebuild_keeps_user_folders(tmp_path):
+    """★★ 使用者會在 `00_影片總覽/` 裡自己開資料夾（例如 `上傳/`）放要給人的
+    片子。原本的 rmtree(browse) 下次重建就把它整個刪掉了。"""
+    root = tmp_path / "rec"
+    root.mkdir()
+    _mk_run(root, "sa4r2_mixed_run04", "mixed", 4)
+    build(root, {})
+    mine = root / BROWSE_DIRNAME / "上傳"
+    mine.mkdir()
+    (mine / "給老師.mp4").write_text("keep me")
+    build(root, {})
+    assert (mine / "給老師.mp4").read_text() == "keep me"
+
+
+def test_rebuild_still_removes_its_own_stale_blocks(tmp_path):
+    """★ 但自己產生的區塊（NN_ 開頭）改名後要清掉，不可兩個名字並存。"""
+    root = tmp_path / "rec"
+    root.mkdir()
+    _mk_run(root, "sa4r2_mixed_run04", "mixed", 4)
+    build(root, {})
+    stale = root / BROWSE_DIRNAME / "02_對照_舊名字"
+    stale.mkdir()
+    (stale / "x.mp4").write_text("old")
+    build(root, {})
+    assert not stale.exists()
