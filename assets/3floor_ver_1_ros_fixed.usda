@@ -162,17 +162,31 @@ over "World"
 
     def Xform "SimObstacles"
     {
-        def Cylinder "ped_1_0" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
+        def Xform "prop_1_0"
         {
-            uniform token axis = "Z"
-            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
-            double height = 1.7
-            double radius = 0.25
-            token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.0882011558138727, 8.689484924681459, 0.5266977823253622, 1) )
-            uniform token[] xformOpOrder = ["xformOp:transform"]
+            def Xform "Visual" (
+                prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Office/Props/SM_FileCabinet_01.usd@
+            )
+            {
+                matrix4d xformOp:transform = ( (-0.015809563469806998, 0.9998750210415771, 0, 0), (-0.9998750210415771, -0.015809563469806998, 0, 0), (0, 0, 1, 0), (-1.0335041777460348, 8.894584792118202, -0.3233022176746377, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+
+                over "SM_FileCabinet_01"
+                {
+                    custom bool physics:collisionEnabled = 0
+                }
+            }
+
+            def Cube "Collider" (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                double size = 1
+                token visibility = "invisible"
+                matrix4d xformOp:transform = ( (-0.011129932682744125, 0.7039120148132703, 0, 0), (-0.39195100824829826, -0.006197348880164343, 0, 0), (0, 0, 1.341, 0), (-1.033741321198082, 8.909582917433825, 0.3471977823253623, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+            }
         }
 
         def Cylinder "pair_1_1" (
@@ -184,7 +198,7 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.7113074549089935, 11.93267411716133, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.6084654072473761, 18.35152133393753, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
@@ -197,21 +211,35 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.3318094638079419, 11.923121266677304, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.2279293081196134, 18.36925479147268, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
-        def Cylinder "ped_2_0" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
+        def Xform "prop_2_0"
         {
-            uniform token axis = "Z"
-            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
-            double height = 1.7
-            double radius = 0.25
-            token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.0174314063876444, 9.164445599439011, 0.5266977823253622, 1) )
-            uniform token[] xformOpOrder = ["xformOp:transform"]
+            def Xform "Visual" (
+                prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Office/Props/SM_Plant02.usd@
+            )
+            {
+                matrix4d xformOp:transform = ( (0.999875021041577, 0.015809563469806907, 0, 0), (-0.015809563469806907, 0.999875021041577, 0, 0), (0, 0, 1, 0), (-1.1664551823228575, 9.315132613911853, -0.3233022176746377, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+
+                over "SM_Plant02"
+                {
+                    custom bool physics:collisionEnabled = 0
+                }
+            }
+
+            def Cube "Collider" (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                double size = 1
+                token visibility = "invisible"
+                matrix4d xformOp:transform = ( (0.9368828947159576, 0.014813560971209073, 0, 0), (-0.01593603997756536, 1.0078740212099095, 0, 0), (0, 0, 1.554, 0), (-1.111689358574661, 9.36200429565234, 0.45369778232536234, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+            }
         }
 
         def Cylinder "pair_2_1" (
@@ -223,7 +251,7 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.7113074549089935, 11.93267411716133, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.7120352868134725, 11.951895726373847, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
@@ -236,7 +264,7 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.3318094638079419, 11.923121266677304, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.3315443387644437, 11.942224400156169, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
@@ -249,34 +277,62 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.1269587962343808, 15.26938480133928, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.357261125329174, 18.75263225697799, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
-        def Cylinder "ped_3_0" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
+        def Xform "prop_3_0"
         {
-            uniform token axis = "Z"
-            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
-            double height = 1.7
-            double radius = 0.25
-            token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.998667089391369, 9.313270665901834, 0.5266977823253622, 1) )
-            uniform token[] xformOpOrder = ["xformOp:transform"]
+            def Xform "Visual" (
+                prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Office/Props/SM_Rack.usd@
+            )
+            {
+                matrix4d xformOp:transform = ( (0.999875021041577, 0.015809563469806907, 0, 0), (-0.015809563469806907, 0.999875021041577, 0, 0), (0, 0, 1, 0), (-1.0360089708559097, 8.738647673072023, -0.3233022176746377, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+
+                over "SM_Rack"
+                {
+                    custom bool physics:collisionEnabled = 0
+                }
+            }
+
+            def Cube "Collider" (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                double size = 1
+                token visibility = "invisible"
+                matrix4d xformOp:transform = ( (0.6139232629195283, 0.009707071970461442, 0, 0), (-0.019350905687043653, 1.2238470257548901, 0, 0), (0, 0, 1.829, 0), (-1.0360089708559097, 8.738647673072023, 0.5911977823253622, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+            }
         }
 
-        def Cylinder "pair_3_1" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
+        def Xform "prop_3_1"
         {
-            uniform token axis = "Z"
-            float3[] extent = [(-0.25, -0.25, -0.85), (0.25, 0.25, 0.85)]
-            double height = 1.7
-            double radius = 0.25
-            token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.767944101821985, 11.956587124269946, 0.5266977823253622, 1) )
-            uniform token[] xformOpOrder = ["xformOp:transform"]
+            def Xform "Visual" (
+                prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Office/Props/SM_FileCabinet_01.usd@
+            )
+            {
+                matrix4d xformOp:transform = ( (-0.015809563469806998, 0.9998750210415771, 0, 0), (-0.9998750210415771, -0.015809563469806998, 0, 0), (0, 0, 1, 0), (1.1641749528358558, 11.242751404393584, -0.3233022176746377, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+
+                over "SM_FileCabinet_01"
+                {
+                    custom bool physics:collisionEnabled = 0
+                }
+            }
+
+            def Cube "Collider" (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                double size = 1
+                token visibility = "invisible"
+                matrix4d xformOp:transform = ( (-0.011129932682744125, 0.7039120148132703, 0, 0), (-0.39195100824829826, -0.006197348880164343, 0, 0), (0, 0, 1.341, 0), (1.1639378093838086, 11.257749529709207, 0.3471977823253623, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+            }
         }
 
         def Cylinder "pair_3_2" (
@@ -288,11 +344,11 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.3884461107209323, 11.96613997475397, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.7966079566714175, 15.691252016367235, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
-        def Cylinder "ped_3_3" (
+        def Cylinder "pair_3_3" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
@@ -301,21 +357,11 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.5745353325833442, 14.639924521329599, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.416071857543655, 15.673518558832086, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
-        def Cube "box_3_4" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
-            double size = 1
-            matrix4d xformOp:transform = ( (0.7, 0, 0, 0), (0, 0.5, 0, 0), (0, 0, 1.55, 0), (-1.2962682979658213, 15.698500694699154, 0.45169778232536234, 1) )
-            uniform token[] xformOpOrder = ["xformOp:transform"]
-        }
-
-        def Cylinder "ped_4_0" (
+        def Cylinder "ped_3_4" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
@@ -324,8 +370,35 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.124571738909382, 7.675653488650158, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-1.2513379955698674, 21.628945978817928, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def Xform "prop_4_0"
+        {
+            def Xform "Visual" (
+                prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Office/Props/SM_Cupboard.usd@
+            )
+            {
+                matrix4d xformOp:transform = ( (0.999875021041577, 0.015809563469806907, 0, 0), (-0.015809563469806907, 0.999875021041577, 0, 0), (0, 0, 1, 0), (-0.8707675491900367, 8.685211224896841, -0.3233022176746377, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+
+                over "SM_Cupboard"
+                {
+                    custom bool physics:collisionEnabled = 0
+                }
+            }
+
+            def Cube "Collider" (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                double size = 1
+                token visibility = "invisible"
+                matrix4d xformOp:transform = ( (0.41894763381642075, 0.006624207093849094, 0, 0), (-0.02908959678444471, 1.8397700387165017, 0, 0), (0, 0, 2.22, 0), (-0.7702801095753582, 8.686800086025556, 0.7866977823253625, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+            }
         }
 
         def Cylinder "ped_4_1" (
@@ -337,7 +410,7 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.2893986505820338, 9.253771341872364, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.173485245223096, 10.527475028943298, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
@@ -350,7 +423,7 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.767944101821985, 11.956587124269946, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.6910109596386933, 15.439230271598394, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
@@ -363,18 +436,35 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.3884461107209323, 11.96613997475397, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.311467817458908, 15.456845253399885, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 
-        def Cube "box_4_4" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
+        def Xform "prop_4_4"
         {
-            float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
-            double size = 1
-            matrix4d xformOp:transform = ( (0.7, 0, 0, 0), (0, 0.5, 0, 0), (0, 0, 1.55, 0), (-1.5399476427919958, 15.091092778299402, 0.45169778232536234, 1) )
-            uniform token[] xformOpOrder = ["xformOp:transform"]
+            def Xform "Visual" (
+                prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Office/Props/SM_FileCabinet_01.usd@
+            )
+            {
+                matrix4d xformOp:transform = ( (-0.028547246833136697, 0.999592444298299, 0, 0), (-0.999592444298299, -0.028547246833136697, 0, 0), (0, 0, 1, 0), (-1.6404811248417077, 18.619013332741353, -0.3233022176746377, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+
+                over "SM_FileCabinet_01"
+                {
+                    custom bool physics:collisionEnabled = 0
+                }
+            }
+
+            def Cube "Collider" (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
+                double size = 1
+                token visibility = "invisible"
+                matrix4d xformOp:transform = ( (-0.020097261770528233, 0.7037130807860025, 0, 0), (-0.3918402381649332, -0.011190520758589586, 0, 0), (0, 0, 1.341, 0), (-1.6409093335442049, 18.634007219405827, 0.3471977823253623, 1) )
+                uniform token[] xformOpOrder = ["xformOp:transform"]
+            }
         }
 
         def Cylinder "ped_4_5" (
@@ -386,7 +476,7 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.4609423433107196, 15.12278333380806, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.9153438970700152, 21.82663911503275, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
     }

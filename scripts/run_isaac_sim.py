@@ -513,7 +513,7 @@ def main() -> int:
     crowd = None
     if (args.crowd_mode == "orca" and walk_driver is not None
             and scen.walks_enabled):
-        from orca_crowd import OrcaCrowd, ccw_rect
+        from orca_crowd import OrcaCrowd, ccw_rect, oriented_rect
         # ⚠⚠ 2026-09-23 使用者回報「走動行人會穿過站著的人」。實測 dynamic 那
         #   12 趟最近距離低到 0.001 m、37~60% 的幀都在重疊。原因：這裡只在
         #   `obstacles_enabled` 時才餵障礙給 ORCA，dynamic 餵 0 個，
@@ -524,9 +524,15 @@ def main() -> int:
         _obs_at = []                     # 每個矩形的中心，用來去重
         if scen.obstacles_enabled:
             for _o in (_sv.obstacles if _sv is not None else _S2.DEFAULT_OBSTACLES):
-                _hx = (_o.size_x / 2.0 if _o.kind == "box" else 0.25)
-                _hy = (_o.size_y / 2.0 if _o.kind == "box" else 0.25)
-                _obs.append(ccw_rect(_o.map_x, _o.map_y, _hx + 0.15, _hy + 0.15))
+                if _o.kind == "prop":
+                    # 道具：bbox 中心就是 (map_x, map_y)，長邊沿走廊 → 要旋轉
+                    _obs.append(oriented_rect(
+                        _o.map_x, _o.map_y, _o.size_x / 2.0 + 0.15,
+                        _o.size_y / 2.0 + 0.15, math.radians(_o.yaw_deg)))
+                else:
+                    _hx = (_o.size_x / 2.0 if _o.kind == "box" else 0.25)
+                    _hy = (_o.size_y / 2.0 if _o.kind == "box" else 0.25)
+                    _obs.append(ccw_rect(_o.map_x, _o.map_y, _hx + 0.15, _hy + 0.15))
                 _obs_at.append((_o.map_x, _o.map_y))
         # 保險：站立人物一律要在 ORCA 的世界裡，即使某天障礙圓柱與站立人物
         # 不再一對一。去重要比**中心**，不是矩形的某個頂點。
@@ -598,6 +604,45 @@ def main() -> int:
         pose_fp = open(args.pose_log, "w")
         pose_fp.write(_POSE_HEADER + "\n")
         print(f"[run_isaac_sim] 位姿軌跡 → {args.pose_log}")
+
+        # 場上實際有什麼 → scene.json（事後分析一律讀它，不重算 variant）。
+        # ⚠ 必須在**所有停用/擺位都做完之後**才拍：太靠近車、站在 routing 點上、
+        #   擠在一起、障礙關閉這幾種停用都發生在前面。
+        try:
+            import sys as _s9
+            _s9.path.insert(0, str(Path(__file__).resolve().parent))
+            import ros_graph_spec as _S9
+            from pxr import UsdGeom as _UG9
+            from scene_snapshot import build_snapshot, write_snapshot
+            _st9 = omni.usd.get_context().get_stage()
+            _on_obs = []
+            _obs_root9 = _st9.GetPrimAtPath("/World/SimObstacles")
+            if _sv is not None and _obs_root9 and _obs_root9.IsValid():
+                _by9 = {o.name: o for o in _sv.obstacles}
+                for _c9 in _obs_root9.GetChildren():
+                    if _c9.IsActive() and _c9.GetName() in _by9:
+                        _on_obs.append(_by9[_c9.GetName()])
+            _walking9 = ({w.name for w in (_sv.walks if _sv is not None
+                                           else _S9.DEFAULT_CHARACTER_WALKS)}
+                         if scen.walks_enabled else set())
+            _chars9 = []
+            _root9 = _st9.GetPrimAtPath("/World/Characters")
+            _cache9 = _UG9.XformCache()
+            if _root9 and _root9.IsValid():
+                for _c9 in _root9.GetChildren():
+                    if _c9.GetName() == "Biped_Setup" or not _c9.IsActive():
+                        continue
+                    _t9 = _cache9.GetLocalToWorldTransform(_c9).ExtractTranslation()
+                    _mx9, _my9, _ = _S9.world_to_map(_t9[0], _t9[1], 0.0)
+                    _chars9.append((_c9.GetName(), _mx9, _my9,
+                                    _c9.GetName() in _walking9))
+            _snap_p = write_snapshot(Path(args.pose_log).parent, build_snapshot(
+                scen.name, args.run_index, _on_obs, _chars9))
+            print(f"[run_isaac_sim] 場景快照 → {_snap_p}"
+                  f"（障礙 {len(_on_obs)}、角色 {len(_chars9)}，其中會走 "
+                  f"{sum(1 for c in _chars9 if c[3])}）")
+        except Exception as _e9:              # 快照失敗不該中斷錄影，但要大聲說
+            print(f"[run_isaac_sim] ⚠ 場景快照寫入失敗：{_e9!r}")
 
     print(f"[run_isaac_sim] 開始模擬  physics={args.physics_hz} Hz  render={args.render_hz} Hz")
 

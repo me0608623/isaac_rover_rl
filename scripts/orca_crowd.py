@@ -75,6 +75,26 @@ def ccw_rect(cx: float, cy: float, half_x: float, half_y: float):
             (cx + half_x, cy + half_y), (cx - half_x, cy + half_y)]
 
 
+def oriented_rect(cx: float, cy: float, half_x: float, half_y: float,
+                  yaw: float):
+    """旋轉 ``yaw``（rad）的矩形，頂點**逆時針**排列（RVO2 要求）。
+
+    道具的長邊沿走廊擺，走廊又不是正東西向，所以不能用 ccw_rect。
+    旋轉不改變繞行方向，所以 ccw_rect 的逆時針順序旋轉後仍是逆時針。
+    """
+    c, s = math.cos(yaw), math.sin(yaw)
+    return [(cx + c * dx - s * dy, cy + s * dx + c * dy)
+            for dx, dy in ((-half_x, -half_y), (half_x, -half_y),
+                           (half_x, half_y), (-half_x, half_y))]
+
+
+def polygon_area(verts) -> float:
+    """有號面積：正 = 逆時針。拿來檢查給 RVO2 的障礙沒有繞反。"""
+    n = len(verts)
+    return sum(verts[i][0] * verts[(i + 1) % n][1] - verts[(i + 1) % n][0] * verts[i][1]
+               for i in range(n)) / 2.0
+
+
 class OrcaCrowd:
     """一群用 ORCA 走路的行人，外加一個由外部控制的車 agent。
 

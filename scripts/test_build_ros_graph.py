@@ -433,3 +433,107 @@ def test_clean_corridor_when_obstacles_empty(stage: Usd.Stage):
     assert S.SimRosSpec().obstacles == ()
     assert not stage.GetPrimAtPath(B.OBSTACLE_ROOT).IsValid()
 
+
+
+def _prop_stage():
+    from pxr import Usd
+    return Usd.Stage.CreateInMemory()
+
+
+def test_prop_collider_sits_on_the_bbox_centre_and_floor():
+    """★★ 碰撞盒要剛好在道具 bbox 的位置：中心在 (wx, wy)、底部貼地、
+    大小 = bbox。PhysX 光達只打碰撞體，錯開的話光達看到的東西跟畫面不一致。"""
+    import math
+
+    import pytest
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
+
+    import build_ros_graph as B
+    import ros_graph_spec as S
+
+    o = S.Obstacle("prop_t", -8.0, 4.5, "prop", height=2.22, size_x=0.419,
+                   size_y=1.84, yaw_deg=-80.0, asset="SM_Cupboard")
+    st = _prop_stage()
+    wx, wy, _ = S.map_to_world(o.map_x, o.map_y, 0.0)
+    B._place_prop(st, "/W/prop_t", o, wx, wy, -0.32)
+
+    col = st.GetPrimAtPath("/W/prop_t/Collider")
+    assert col.HasAPI(UsdPhysics.CollisionAPI)
+    assert UsdGeom.Imageable(col).ComputeVisibility() == "invisible"
+    m = UsdGeom.XformCache().GetLocalToWorldTransform(col)
+    c = m.Transform(Gf.Vec3d(0, 0, 0))
+    assert (c[0], c[1]) == pytest.approx((wx, wy), abs=1e-6)
+    assert c[2] == pytest.approx(-0.32 + 2.22 / 2, abs=1e-6)      # 底部貼地
+    bot = m.Transform(Gf.Vec3d(0, 0, -0.5))
+    assert bot[2] == pytest.approx(-0.32, abs=1e-6)
+    # 旋轉不應改變邊長
+    ex = (m.Transform(Gf.Vec3d(0.5, 0, 0)) - m.Transform(Gf.Vec3d(-0.5, 0, 0))).GetLength()
+    ey = (m.Transform(Gf.Vec3d(0, 0.5, 0)) - m.Transform(Gf.Vec3d(0, -0.5, 0))).GetLength()
+    assert ex == pytest.approx(0.419, abs=1e-6)
+    assert ey == pytest.approx(1.84, abs=1e-6)
+
+
+def test_prop_model_is_shifted_so_its_bbox_centre_matches_the_collider():
+    """★★ SM_Cupboard 的 bbox 中心在本地 (+0.10, 0)。模型原點要反向補回，
+    否則碰撞盒跟模型錯開 10 cm —— 在畫面上看是「車撞到空氣」或「穿進櫃子」。"""
+    import pytest
+    from pxr import Gf, UsdGeom
+
+    import build_ros_graph as B
+    import props as P
+    import ros_graph_spec as S
+
+    for yaw in (0.0, -80.0, 37.0):
+        o = S.Obstacle("prop_t", -8.0, 4.5, "prop", height=2.22, size_x=0.419,
+                       size_y=1.84, yaw_deg=yaw, asset="SM_Cupboard")
+        st = _prop_stage()
+        wx, wy, _ = S.map_to_world(o.map_x, o.map_y, 0.0)
+        B._place_prop(st, "/W/prop_t", o, wx, wy, -0.32)
+        vis = st.GetPrimAtPath("/W/prop_t/Visual")
+        m = UsdGeom.XformCache().GetLocalToWorldTransform(vis)
+        cx, cy = P.prop("SM_Cupboard").centre_xy
+        centre_world = m.Transform(Gf.Vec3d(cx, cy, 0.0))
+        assert (centre_world[0], centre_world[1]) == pytest.approx((wx, wy), abs=1e-6), yaw
+        assert m.Transform(Gf.Vec3d(0, 0, 0))[2] == pytest.approx(-0.32, abs=1e-6)
+
+
+def test_prop_references_the_cdn_asset_and_disables_its_own_collider():
+    """★ 模型參照 CDN 上的正牌資產；道具自帶的三角網格碰撞體要關掉，
+    避免兩層碰撞體（光達、物理、ORCA、分析用同一個 bbox）。"""
+    import build_ros_graph as B
+    import props as P
+    import ros_graph_spec as S
+
+    o = S.Obstacle("prop_t", -8.0, 4.5, "prop", height=1.755, size_x=1.305,
+                   size_y=1.541, yaw_deg=10.0, asset="SM_Plant01")
+    st = _prop_stage()
+    B._place_prop(st, "/W/prop_t", o, 0.0, 0.0, -0.32)
+    vis = st.GetPrimAtPath("/W/prop_t/Visual")
+    refs = [r.assetPath for spec in vis.GetPrimStack()
+            for r in spec.referenceList.prependedItems]
+    assert refs == [P.prop("SM_Plant01").url]
+    inner = st.GetPrimAtPath("/W/prop_t/Visual/SM_Plant01")
+    assert inner.GetAttribute("physics:collisionEnabled").Get() is False
+
+
+def test_prop_yaw_follows_the_map_to_world_rotation():
+    """★ yaw 存在 map frame，寫進 USD 要換成 world frame（兩者差 96.8°）。
+    忘了換的話長邊會橫在走廊上。"""
+    import math
+
+    import pytest
+    from pxr import Gf, UsdGeom
+
+    import build_ros_graph as B
+    import ros_graph_spec as S
+
+    yaw_map = -80.0
+    o = S.Obstacle("prop_t", -8.0, 4.5, "prop", height=2.22, size_x=0.419,
+                   size_y=1.84, yaw_deg=yaw_map, asset="SM_Cupboard")
+    st = _prop_stage()
+    B._place_prop(st, "/W/prop_t", o, 0.0, 0.0, -0.32)
+    m = UsdGeom.XformCache().GetLocalToWorldTransform(st.GetPrimAtPath("/W/prop_t/Collider"))
+    ax = m.TransformDir(Gf.Vec3d(1, 0, 0))
+    yaw_world = math.atan2(ax[1], ax[0])
+    expect = S.map_to_world(0.0, 0.0, math.radians(yaw_map))[2]
+    assert math.cos(yaw_world - expect) == pytest.approx(1.0, abs=1e-9)

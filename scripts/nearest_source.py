@@ -54,7 +54,7 @@ STANDING_RADIUS_M = 0.25
 NEAR_THRESHOLD_M = 0.45
 
 #: 分類標籤。順序 = 報表欄位順序。
-CATEGORIES = ("走動行人", "站立行人", "箱型障礙", "牆")
+CATEGORIES = ("走動行人", "站立行人", "道具", "牆")
 
 #: 實測比預測近這麼多以上（m），就**不歸給任何一類**，標成「來源不明」。
 #:
@@ -63,8 +63,10 @@ CATEGORIES = ("走動行人", "站立行人", "箱型障礙", "牆")
 #: 之後（同一片雲有 65% 的點落在佔據圖的牆上 0.05 m 內，所以 TF 沒問題），
 #: 它落在離最近牆 2.25 m 的空地上、離車正後方 0.45 m，**而且隨車一起移動**；
 #: 佔據圖、建物 Mesh、18 個障礙 prim、13 個角色的位置都對不上。
-#: 最可能是車體自身結構被自己的 RTX 光達打到（RTX 光達打的是算圖網格、
-#: 不是物理碰撞體），不是環境障礙。
+#: 它不可能是光達的原始回波：PhysX 光達 minRange=0.5 m、可見帶仰角 ±15°，
+#: 真實回波的水平距離最小 0.5×cos15° = 0.483 m，這些點卻是 0.447 m ——
+#: 是後處理（運動模糊，/velodyne_points_ideal → /velodyne_points）搬過的點。
+#: （先前寫成「被自己的 RTX 光達打到」—— 光達是 PhysX 的，機制講錯。）
 #: 寧可誠實標「不明」，也不要硬塞給最近的那一類 —— 那 4 幀被塞給了
 #: 「走動行人」，而實際上最近的行人在 1.75 m 外。
 UNEXPLAINED_SLACK_M = 0.5
@@ -76,6 +78,15 @@ def cylinder_surface_distance(p, centre, radius: float) -> float:
     ⚠ 回負值會讓 argmin 永遠選中它，把所有幀都歸給同一個障礙。
     """
     return max(0.0, math.hypot(p[0] - centre[0], p[1] - centre[1]) - radius)
+
+
+def oriented_box_distance(p, centre, half_x: float, half_y: float,
+                          yaw: float) -> float:
+    """點到**旋轉 yaw**的方箱側面的水平距離（道具的長邊沿走廊擺，會轉）。"""
+    dx, dy = p[0] - centre[0], p[1] - centre[1]
+    c, s_ = math.cos(-yaw), math.sin(-yaw)
+    lx, ly = c * dx - s_ * dy, s_ * dx + c * dy
+    return math.hypot(max(0.0, abs(lx) - half_x), max(0.0, abs(ly) - half_y))
 
 
 def box_surface_distance(p, centre, half_x: float, half_y: float) -> float:
@@ -242,12 +253,10 @@ def _wall_distance_field(pgm="map/4v3F.pgm", yml="map/4v3F.yaml"):
     return query
 
 
-def decompose_run(run_dir: Path, wall_q, homes):
+def decompose_run(run_dir: Path, wall_q, homes=None):
     """回傳這一趟的分解結果，或 None（資料不足）。"""
     import ros_graph_spec as S
-    from character_colliders import too_close_to_robot
     from pose_log import parse_crowd_rows, parse_rows, pose_at
-    from scene_variants import variant
     from scenarios import scenario_config
 
     meta = json.loads((run_dir / "run.json").read_text())
@@ -261,22 +270,26 @@ def decompose_run(run_dir: Path, wall_q, homes):
         return None
     rob0 = (poses[0].pos[0], poses[0].pos[1])
 
-    var = variant(idx) if idx >= 1 else None
-    boxes, standing, static_peds = [], [], []
-    if var is not None:
-        if scen.obstacles_enabled:
-            for o in var.obstacles:
-                if o.kind == "box":
-                    wx, wy, _ = S.map_to_world(o.map_x, o.map_y, 0.0)
-                    boxes.append((wx, wy, o.size_x / 2.0, o.size_y / 2.0))
-        # 站立人物在**三個情境都在場**（place_standing 不看 obstacles_enabled）
-        standing = [(p.map_x, p.map_y) for p in var.standing]
-        if not scen.walks_enabled:
-            # 走動人物沒被驅動 → 停在 USD 原位（太靠近車的那些已被停用）
-            for w in var.walks:
-                h = homes.get(w.name)
-                if h and not too_close_to_robot(h[2], rob0):
-                    static_peds.append((h[0], h[1]))
+    # ⚠⚠ 場上有什麼一律讀 scene.json（錄影當下拍的），**不重算 variant()** ——
+    #   2026-09-23 障礙擺法改成分層抽樣、加入道具之後，同一個 run_index 在新舊
+    #   程式碼裡位置完全不同。拿新程式分析舊錄影會把障礙放錯、算出錯的距離，
+    #   而且不會報錯。沒有快照的舊錄影直接跳過。
+    from scene_snapshot import obstacles_of, read_snapshot, still_bodies
+    snap = read_snapshot(run_dir)
+    if snap is None:
+        return {"tag": meta["tag"], "skipped":
+                "沒有 scene.json（舊錄影）—— 不能用現在的 variant() 重算場景"}
+    boxes, props = [], []
+    for o in obstacles_of(snap):
+        if o.kind == "prop":
+            props.append((o.map_x, o.map_y, o.size_x / 2.0, o.size_y / 2.0,
+                          math.radians(o.yaw_deg)))
+        elif o.kind == "box":
+            wx, wy, _ = S.map_to_world(o.map_x, o.map_y, 0.0)
+            boxes.append((wx, wy, o.size_x / 2.0, o.size_y / 2.0))
+    # 不會走的角色：站立人物 + static 情境停在原位的人（已扣掉執行期停用的）
+    standing = still_bodies(snap)
+    static_peds = []
 
     crowd_by_frame = defaultdict(list)
     if (run_dir / "crowd.csv").exists():
@@ -302,9 +315,11 @@ def decompose_run(run_dir: Path, wall_q, homes):
             d["站立行人"] = (min(cylinder_surface_distance((gx, gy), p,
                                                         STANDING_RADIUS_M)
                                 for p in fixed) if fixed else None)
-            d["箱型障礙"] = (min(box_surface_distance(
-                (s.pos[0], s.pos[1]), (bx, by), hx, hy)
-                for bx, by, hx, hy in boxes) if boxes else None)
+            _dp = [oriented_box_distance((gx, gy), (px, py), hx, hy, yw)
+                   for px, py, hx, hy, yw in props]
+            _dp += [box_surface_distance((s.pos[0], s.pos[1]), (bx, by), hx, hy)
+                    for bx, by, hx, hy in boxes]
+            d["道具"] = min(_dp) if _dp else None
             d["牆"] = wall_q(gx, gy)
             who = classify(d)
             if who is None:
@@ -334,14 +349,16 @@ def decompose_run(run_dir: Path, wall_q, homes):
 
 def main(root: Path) -> int:
     wall_q = _wall_distance_field()
-    homes = character_home_positions()
     rows = []
     hdr = f"{'tag':28s}{'取樣':>5s}" + "".join(f"{c:>9s}" for c in CATEGORIES)
     print(hdr + f"{'對齊殘差':>10s}{'≤0.45m 的來源':>16s}")
     print("-" * (len(hdr) + 30))
     for d in run_dirs(root):
-        r = decompose_run(d, wall_q, homes)
+        r = decompose_run(d, wall_q)
         if r is None:
+            continue
+        if "skipped" in r:
+            print(f"{r['tag']:28s}  跳過：{r['skipped']}")
             continue
         rows.append(r)
         n = max(1, r["samples"])

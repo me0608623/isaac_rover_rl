@@ -562,6 +562,10 @@ def place_corridor_obstacles(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Chang
         wx, wy, _ = S.map_to_world(o.map_x, o.map_y, 0.0)
         cz = floor_top + o.height / 2.0          # 底部貼地
 
+        if o.kind == "prop":
+            changes.append(_place_prop(stage, path, o, wx, wy, floor_top))
+            continue
+
         if o.kind == "person":
             g = UsdGeom.Cylinder.Define(stage, path)
             g.CreateRadiusAttr(float(o.radius))
@@ -596,6 +600,66 @@ def place_corridor_obstacles(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Chang
         changes.append(Change(path, f"{o.kind} @ map({o.map_x:+.1f},{o.map_y:+.1f})",
                               None, f"World({wx:.3f},{wy:.3f},{cz:.3f}) {desc}"))
     return changes
+
+
+def _place_prop(stage: Usd.Stage, path: str, o, wx: float, wy: float,
+                floor_top: float) -> "Change":
+    """放一個 Isaac 官方道具：可見模型 + **隱形 bbox 碰撞盒**。
+
+    ⚠⚠ 光達是 PhysX 光達（isaacsim.sensors.physx.IsaacReadLidarPointCloud），
+    **只打物理碰撞體、不看算圖網格**。所以道具要被看到，碰撞體一定要涵蓋
+    光達那一層（離地 0.93~1.93 m）。做法跟人形障礙一樣分工：
+
+      path/Visual    參照 CDN 上的道具 USD（外觀；第二遍 path tracing 拍得到）
+      path/Collider  隱形 Cube，大小 = 道具 bbox（光達、物理、ORCA、事後分析
+                     四者用同一個幾何）
+
+    道具自帶的三角網格碰撞體關掉（path/Visual/<名字>），避免兩層碰撞體。
+
+    單位：道具與 People 角色一樣是 metersPerUnit=1、Z 朝上、原點在底部，
+    角色以 scale=1 參照後尺寸正確，所以這裡也不補縮放。
+    （建物 stage 的標頭寫 metersPerUnit=0.01、upAxis=Y，與實際內容不符。）
+
+    位置：(wx, wy) 是 **bbox 中心**。模型原點不一定在 bbox 中心
+    （SM_Cupboard 偏 +0.10 m），要反向補回去，否則碰撞盒跟模型錯開。
+    """
+    from pxr import Sdf, UsdPhysics
+
+    import props as P
+
+    spec = P.prop(o.asset)
+    _, _, yaw_w = S.map_to_world(o.map_x, o.map_y, math.radians(o.yaw_deg))
+    rot = Gf.Rotation(Gf.Vec3d(0, 0, 1), math.degrees(yaw_w))
+    R = Gf.Matrix4d(1.0).SetRotate(rot)
+
+    UsdGeom.Xform.Define(stage, path)
+
+    # 模型：原點要擺在「bbox 中心 − R·(bbox 中心相對原點的偏移)」
+    cx_l, cy_l = spec.centre_xy
+    off = R.Transform(Gf.Vec3d(cx_l, cy_l, 0.0))
+    vis = UsdGeom.Xform.Define(stage, f"{path}/Visual")
+    vis.GetPrim().GetReferences().AddReference(spec.url)
+    # ⚠ pxr 是 row-vector：p' = p·R·T，先轉再平移。
+    vis.MakeMatrixXform().Set(R * Gf.Matrix4d(1.0).SetTranslate(
+        Gf.Vec3d(wx - off[0], wy - off[1], floor_top)))
+    # 關掉道具自帶的碰撞體（defaultPrim /Root 對應到 Visual，網格在 Visual/<名字>）
+    inner = stage.OverridePrim(f"{path}/Visual/{spec.name}")
+    inner.CreateAttribute("physics:collisionEnabled",
+                          Sdf.ValueTypeNames.Bool).Set(False)
+
+    # 碰撞盒：邊長 1 的 Cube，縮放成 bbox 大小，再轉、再平移到 bbox 中心
+    box = UsdGeom.Cube.Define(stage, f"{path}/Collider")
+    box.CreateSizeAttr(1.0)
+    box.CreateExtentAttr([(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)])
+    S_ = Gf.Matrix4d(1.0).SetScale(Gf.Vec3d(spec.size_x, spec.size_y, spec.height))
+    T = Gf.Matrix4d(1.0).SetTranslate(Gf.Vec3d(wx, wy, floor_top + spec.height / 2.0))
+    box.MakeMatrixXform().Set(S_ * R * T)
+    UsdGeom.Imageable(box.GetPrim()).CreateVisibilityAttr("invisible")
+    UsdPhysics.CollisionAPI.Apply(box.GetPrim())
+
+    return Change(path, f"prop {spec.name} @ map({o.map_x:+.1f},{o.map_y:+.1f})",
+                  None, f"World({wx:.3f},{wy:.3f}) yaw {math.degrees(yaw_w):.1f}° "
+                        f"bbox {spec.size_x:.2f}x{spec.size_y:.2f}x{spec.height:.2f}")
 
 
 def add_clock_publisher(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Change]:

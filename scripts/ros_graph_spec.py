@@ -13,6 +13,7 @@ PC 端對照文件：docs/2026-09-21_模擬ROS契約對照_PC端回覆.md
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from typing import Mapping
 
@@ -420,13 +421,29 @@ class Obstacle:
     name: str
     map_x: float
     map_y: float
-    #: "person" = 直立圓柱（人體代理）；"box" = 方箱（推車／雜物）
+    #: "person" = 直立圓柱（人體代理）+ 站立角色
+    #: "prop"   = Isaac 官方道具（見 props.PROPS）+ 隱形 bbox 碰撞盒
+    #: "box"    = 方箱（舊版推車代理，只剩 DEFAULT_OBSTACLES 在用）
     kind: str = "person"
     radius: float = 0.25          # 人體代理半徑（肩寬約 0.45~0.5 m）
-    height: float = 1.70          # 成人身高
-    size_x: float = 0.6           # box 用
+    height: float = 1.70          # 成人身高；prop 為 bbox 高
+    size_x: float = 0.6           # box / prop 的 bbox 尺寸（**道具自己的**座標）
     size_y: float = 0.6
+    #: 朝向，**map frame**、度。prop 用來讓長邊平行走廊。
     yaw_deg: float = 0.0
+    #: prop 的名字（props.PROPS 的 key），其他 kind 為空字串。
+    asset: str = ""
+
+    @property
+    def extent_radius(self) -> float:
+        """水平外接圓半徑（m）。算淨空一律用它，不用中心點。
+
+        ⚠ 道具不是點：SM_Cupboard 長 1.84 m，中心離站點 1.9 m 的話
+        一端只剩 1.0 m。只看中心會讓大道具壓到站點。
+        """
+        if self.kind == "person":
+            return self.radius
+        return math.hypot(self.size_x, self.size_y) / 2.0
 
 
 #: 展示路線：從 ROUTE_START 出發、到 ROUTE_GOAL 折返回來（來回兩段）。
@@ -436,12 +453,17 @@ class Obstacle:
 #: 而 c25 在 map (-14.218, +5.377) 是**側邊節點、不在 spine 上** ——
 #: 去程尾段會離開障礙帶。改到 c27 (-16.932, +3.588) 之後整條路線都貼著 spine，
 #: 車從頭到尾都要閃避，路線也長 19%（14.4 m → 17.0 m）。
+#:
+#: 2026-09-23 再延伸到 **c36**（-20.75, +3.17）：c27→c36 這 3.8 m 在佔據圖上
+#: 最小淨空 2.25 m、建物網格與 NavFloor 都涵蓋，是同一條走廊的延續，
+#: 路線 17.0 → 20.9 m。障礙仍**主要擺在 c28→c27**（見 OBSTACLE_S_RANGE）——
+#: c27→c36 只有 3.8 m，兩端各要 1.8 m 淨空，本來就擺不下，留作進站路段。
 ROUTE_START = "c28"
-ROUTE_GOAL = "c27"
+ROUTE_GOAL = "c36"
 
 #: 這條路線**實際依序經過**的 routing 站（從 RViz 的 routes_visualization 讀出）。
-#: 只有這幾個要對障礙要求淨空 —— 走廊上到處是車不會去的側室站點。
-ROUTE_WAYPOINTS: tuple[str, ...] = ("c28", "c4", "c26", "c27")
+#: 只有這幾個要對障礙要求更嚴的淨空 —— 走廊上到處是車不會去的側室站點。
+ROUTE_WAYPOINTS: tuple[str, ...] = ("c28", "c4", "c26", "c27", "c36")
 
 
 #: 預設障礙物：沿 c28 → c27 這條展示路線佈置，讓車真的要閃避。

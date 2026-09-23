@@ -49,8 +49,21 @@ python3 scripts/check_recordings.py recordings > reports/recordings_health.txt 2
 tail -6 reports/recordings_health.txt | tee -a "$LOG"
 
 stage "4/8 產生結果 README"
-python3 scripts/make_readme.py recordings > recordings/README.md 2>>"$LOG" \
-    && say "  recordings/README.md（$(wc -l < recordings/README.md) 行）"
+# ⚠ 先寫到暫存檔、成功才覆蓋。直接 `> README.md` 的話 shell 會先把它清空，
+#   主批次失敗（0 趟）時 make_readme 回傳 1、什麼都沒印 —— README 就被抹成空檔。
+write_readme () {
+    local root="$1" tmp
+    tmp=$(mktemp)
+    if python3 scripts/make_readme.py "$root" > "$tmp" 2>>"$LOG" && [ -s "$tmp" ]; then
+        mv "$tmp" "$root/README.md"
+        say "  $root/README.md（$(wc -l < "$root/README.md") 行）"
+    else
+        rm -f "$tmp"
+        say "  ⚠ $root 產不出 README，保留舊的"
+    fi
+}
+write_readme recordings
+python3 scripts/make_browse_tree.py >> "$LOG" 2>&1 && say "  中文索引已重建"
 
 # ── 5. 給 record_batch.sh 打補丁（批次已結束，現在可以改）──────────
 stage "5/8 record_batch.sh 補丁（CROWD_MODE + rosbag 收尾等待）"
@@ -85,8 +98,7 @@ run_arm () {
     python3 scripts/make_sync.py "$DIR" 2>&1 | grep -c 已寫入 >/dev/null
     python3 scripts/localization_error.py "$DIR" \
         > "reports/localization_error_$NAME.txt" 2>&1
-    python3 scripts/make_readme.py "$DIR" \
-        > "$DIR/README.md" 2>/dev/null
+    write_readme "$DIR"
 }
 
 run_arm "crowd_path"  CROWD_MODE=path

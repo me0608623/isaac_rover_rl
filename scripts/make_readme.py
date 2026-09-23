@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from run_layout import BROWSE_DIRNAME, run_dirs
+from scene_counts import counts_from_log
 
 _ROW = re.compile(
     r"^(c\d+)→(c\d+)\s+(OK|FAIL)\s+([\d.]+)s\s+([\d.]+)m\s+([\d.]+)m\s+(\d+)/(\d+)")
@@ -48,6 +49,29 @@ def cell_summary(legs):
         "collision_frames": sum(l["collision_frames"] for l in legs),
         "seconds": sum(l["seconds"] for l in legs) / len(legs),
     }
+
+
+SCEN_ZH = {"static": "純靜態", "dynamic": "動態", "mixed": "混合"}
+
+
+def density_table(runs):
+    """情境 × 趟次的「靜N動M」表。數字取自各趟 log（run["counts"]）。
+
+    同一格有好幾個模型時，數字應該一樣（場景只依 run_index 與情境決定）；
+    不一樣就**全部列出**，不要挑一個 —— 那代表執行期停用的角色不同。
+    """
+    idxs = sorted({r.get("run_index", 0) for r in runs if r.get("run_index")})
+    out = ["| 情境 | " + " | ".join(f"第{i}趟" for i in idxs) + " |",
+           "|---|" + "---|" * len(idxs)]
+    for sc in ("static", "dynamic", "mixed"):
+        cells = []
+        for i in idxs:
+            got = sorted({tuple(r["counts"]) for r in runs
+                          if r.get("scenario") == sc and r.get("run_index") == i
+                          and r.get("counts")})
+            cells.append(" / ".join(f"靜{a}動{b}" for a, b in got) if got else "—")
+        out.append(f"| {SCEN_ZH[sc]} | " + " | ".join(cells) + " |")
+    return out
 
 
 def render(runs, has_browse_tree: bool = True) -> str:
@@ -133,17 +157,10 @@ def render(runs, has_browse_tree: bool = True) -> str:
     A("動態數 = 沿路徑移動的角色")
     A("```")
     A("")
-    A("所以同一個「第4趟」在三個情境的實際密度差很多：")
+    A("各情境 × 各趟實際在場的數量（**由各趟的 log 數出來**，不是抄計畫表）：")
     A("")
-    A("| 情境 | 第1趟 | 第2趟 | 第3趟 | 第4趟 |")
-    A("|---|---|---|---|---|")
-    A("| 純靜態 | 靜5動0 | 靜8動0 | 靜11動0 | **靜14動0** |")
-    A("| 純動態 | 靜3動2 | 靜4動4 | 靜4動6 | 靜5動8 |")
-    A("| 混合 | 靜3動2 | 靜4動4 | 靜5動6 | 靜6動8 |")
-    A("")
-    A("**純靜態才是靜態物最密的情境**（走動人物停在原位也算靜態，而且")
-    A("Character_10~13、19 的原位就在走廊中線上）—— 這就是 static 那幾趟")
-    A("耗時最長、最近距離最差的原因。")
+    for line in density_table(runs):
+        A(line)
     A("")
     A("重建索引（重錄後跑一次就好，只建連結、不複製檔案）：")
     A("")
@@ -158,20 +175,21 @@ def render(runs, has_browse_tree: bool = True) -> str:
     A("")
     A("## 場景")
     A("")
-    A("| 情境 | 障礙圓柱(不可見) | 箱型障礙(可見) | 站立人物 | 走動人物 |")
-    A("|---|---|---|---|---|")
-    A("| `static` | 啟用 | 啟用 | 在圓柱位置 | **站在 USD 原位、不走動** |")
-    A("| `dynamic` | 全部關閉 | 全部關閉 | **仍在場** | ORCA 互動避讓 |")
-    A("| `mixed` | 啟用 | 啟用 | 在圓柱位置 | ORCA 互動避讓 |")
+    A("| 情境 | 靜態障礙（人形 / 道具） | 走動人物 |")
+    A("|---|---|---|")
+    A("| `static` | 啟用 | 不走動、停在 USD 原位（**也算靜態**）|")
+    A("| `dynamic` | **全部關閉**（連站立人物也停用） | ORCA 互動避讓 |")
+    A("| `mixed` | 啟用 | ORCA 互動避讓 |")
     A("")
-    A("### ⚠⚠ `dynamic` 並不是「沒有靜態障礙」")
+    A("靜態障礙每個都**隨機抽**成「站立行人」或「Isaac 官方道具」（置物櫃、貨架、")
+    A("盆栽、檔案櫃），抽法見 `scripts/scene_variants.py` 的 `_place_obstacles`。")
+    A("道具一律配一個**隱形 bbox 碰撞盒** —— 光達是 PhysX 光達、只打碰撞體，")
+    A("道具只放模型的話光達看不到。可用道具清單與高度實測見 `scripts/props.py`。")
     A("")
-    A("`scenarios.py` 的註解寫 `dynamic` 是「行人沿路徑走動，靜態障礙全部關掉」，")
-    A("圓柱確實全關（log 印 `0/18 啟用`）。**但 `run_isaac_sim` 的 `place_standing`")
-    A("不看 `obstacles_enabled`**，照樣把 3~5 個站立人物擺到那些被關掉的圓柱位置上。")
-    A("所以 `dynamic` 場上仍有 3~5 個**靜止的人形障礙**。")
+    A("### 舊批次（c28↔c25）的 `dynamic` 其實有靜態障礙 —— 已修正")
     A("")
-    A("後果是 `dynamic` 與 `mixed` 的靜態內容幾乎一樣：")
+    A("舊版 `place_standing` 不看 `obstacles_enabled`，`dynamic` 場上仍有 3~5 個")
+    A("站立人物，與 `mixed` 的靜態內容幾乎相同：")
     A("")
     A("| 難度 | `dynamic` | `mixed` | 差別 |")
     A("|---|---|---|---|")
@@ -180,16 +198,13 @@ def render(runs, has_browse_tree: bool = True) -> str:
     A("| 第3趟 | 靜4動6 | 靜5動6 | 差 1 個（箱型障礙）|")
     A("| 第4趟 | 靜5動8 | 靜6動8 | 差 1 個（箱型障礙）|")
     A("")
-    A("而且 person 圓柱是 `visibility=invisible`（只當物理碰撞體），箱型是可見的。")
-    A("velodyne 是 RTX 光達、打的是**算圖網格**，所以那些圓柱本來就不在點雲裡；")
-    A("圓柱又一律與站立人物同一位置（站立人物數 = person 圓柱數），")
-    A("光達看得到的差別**只有那一個箱子**（第3、4趟）。")
+    A("**上表是舊路線（c28↔c25）那一批。已修正：** 障礙關閉時站立人物整個停用，")
+    A("新批次的 `dynamic` 場上真的沒有靜態物。舊批次的 `dynamic` 不可當純動態引用。")
     A("")
-    A("兩者仍有差：`mixed` 的圓柱是實體碰撞體（半徑 0.25），且 ORCA 在 `mixed`")
-    A("會把圓柱當障礙餵進去、行人走法因此不同。但這不是「有/沒有靜態障礙」的對比。")
-    A("")
-    A("**寫論文時不可以把 `dynamic` 描述成純動態場景。** 要嘛照實描述成")
-    A("「無推車類障礙物、但有靜止行人」，要嘛把站立人物一起關掉重錄那 12 趟。")
+    A("⚠ 更正：這裡先前寫「velodyne 是 RTX 光達、看不到隱形圓柱」——**錯**。")
+    A("發佈 `/velodyne_points_ideal` 的是 `isaacsim.sensors.physx.IsaacReadLidarPointCloud`，")
+    A("讀的是 PhysX `Lidar` prim（stage 裡另有一個 `RTX_Lidar`，但沒有接到發佈節點）。")
+    A("PhysX 光達**只打物理碰撞體**，隱形圓柱看得到、只有算圖網格沒碰撞體的東西才看不到。")
     A("")
     A("### `static` 的走動人物沒有消失")
     A("")
@@ -230,9 +245,27 @@ def render(runs, has_browse_tree: bool = True) -> str:
     A("已知物體在 1.75 m 外。把那片回波用 bag 的 TF 搬到 map 之後（同一片雲有")
     A("65% 的點落在佔據圖的牆上 0.05 m 內，所以 TF 沒問題），它落在離最近牆")
     A("2.25 m 的空地、車正後方 0.45 m，**隨車一起移動**；佔據圖、建物 Mesh、")
-    A("18 個障礙 prim、13 個角色的位置全都對不上。最可能是車體自身結構被自己的")
-    A("RTX 光達打到（RTX 光達打的是算圖網格，不是物理碰撞體）。")
+    A("18 個障礙 prim、13 個角色的位置全都對不上。")
+    A("")
+    A("它**不可能是光達的原始回波**：PhysX 光達 `minRange = 0.5 m`，可見帶仰角 ±15°，")
+    A("真實回波的水平距離最小是 0.5 × cos15° = **0.483 m**，而這些點是 0.447 m。")
+    A("`/velodyne_points` 是後處理節點（運動模糊）從 `/velodyne_points_ideal` 產生的，")
+    A("這些點是被它往內搬過的。（先前說成「被自己的 RTX 光達打到」—— 機制講錯。）")
+    A("舊批次 bag 沒錄 `_ideal`，無法直接比對；新批次已加錄。")
     A("**引用碰撞幀時，`sa4r3` mixed 那 4 幀應當排除（該列實為 0）。**")
+    A("")
+    A("### ⚠⚠ 碰撞幀這個指標本身的限制")
+    A("")
+    A("光達量得到的最近距離在 **約 0.45~0.5 m 就飽和**（minRange 0.5 m），")
+    A("比這更近的真實距離它量不到。所以「光達最近距離 ≤0.45 m」這個碰撞幀定義")
+    A("兩個方向都不可靠：")
+    A("")
+    A("- 真的很近時未必觸發 —— 讀值卡在 0.48 附近，要靠後處理剛好往內搬才過門檻")
+    A("- 沒有東西時也可能觸發 —— 上面那 4 個來源不明就是")
+    A("")
+    A("上表 7 個有來源的碰撞幀，真值幾何算出的表面距離是 **0.26~0.39 m**，")
+    A("光達卻讀成 0.42~0.45 m。**論文要講「多近」請用真值幾何的距離**")
+    A("（`scripts/nearest_source.py` 的預測值），不要用光達讀值。")
     A("")
     A("方法本身的誤差：預測−實測的逐趟中位都落在 −0.22 ~ 0.00 m。p05 到 −0.65 m ——")
     A("那是佔據圖上有實機掃描留下的雜物、模擬場景裡沒有，所以「離牆距離」偏小。")
@@ -336,6 +369,9 @@ def main(root: Path) -> int:
         meta = json.loads(mp.read_text())
         nav = (d / "nav.log").read_text(errors="replace") if (d / "nav.log").exists() else ""
         meta["legs"] = parse_nav_table(nav)
+        log = d / "isaac_nav.log"
+        meta["counts"] = (counts_from_log(log.read_text(errors="replace"))
+                          if log.exists() else None)
         runs.append(meta)
     if not runs:
         print("（找不到任何 run.json）", file=sys.stderr)

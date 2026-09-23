@@ -36,15 +36,15 @@ def test_box_distance_zero_when_inside():
 
 def test_classify_picks_the_closest_source():
     assert classify({"走動行人": 0.5, "牆": 2.0}) == "走動行人"
-    assert classify({"走動行人": 1.5, "箱型障礙": 0.4, "牆": 2.0}) == "箱型障礙"
+    assert classify({"走動行人": 1.5, "道具": 0.4, "牆": 2.0}) == "道具"
     assert classify({"走動行人": 1.5, "牆": 0.3}) == "牆"
 
 
 def test_classify_ignores_missing_sources():
     """★ static 沒有走動行人、dynamic 沒有箱型障礙 —— 缺項是常態，
     不能因為有一個 None 就整組壞掉或被 None 贏走。"""
-    assert classify({"走動行人": None, "箱型障礙": 0.4, "牆": 2.0}) == "箱型障礙"
-    assert classify({"走動行人": None, "箱型障礙": None, "牆": 0.3}) == "牆"
+    assert classify({"走動行人": None, "道具": 0.4, "牆": 2.0}) == "道具"
+    assert classify({"走動行人": None, "道具": None, "牆": 0.3}) == "牆"
 
 
 def test_classify_with_nothing_returns_none():
@@ -53,7 +53,7 @@ def test_classify_with_nothing_returns_none():
 
 def test_categories_cover_every_physical_source():
     """★ 少一類就會被歸到「牆」，那正是這支程式要查清楚的事。"""
-    assert set(CATEGORIES) == {"走動行人", "站立行人", "箱型障礙", "牆"}
+    assert set(CATEGORIES) == {"走動行人", "站立行人", "道具", "牆"}
 
 
 def test_radii_are_documented_and_sane():
@@ -142,3 +142,37 @@ def test_unexplained_slack_is_big_enough_to_be_a_real_gap():
 
     assert 0.3 <= UNEXPLAINED_SLACK_M <= 1.0
     assert UNEXPLAINED_SLACK_M > NEAR_THRESHOLD_M / 2
+
+
+def test_oriented_box_distance_respects_rotation():
+    """★ 道具長邊沿走廊擺、會旋轉。用軸對齊的距離算，長 1.84 m 的櫃子
+    轉 90° 後在某些方向會差將近 0.7 m。"""
+    from nearest_source import oriented_box_distance
+
+    # 半寬 (0.9, 0.2)：不轉時，沿 x 方向 1.9 m 外的點離邊 1.0 m
+    assert oriented_box_distance((1.9, 0.0), (0, 0), 0.9, 0.2, 0.0) == pytest.approx(1.0)
+    # 轉 90° 後長邊變成 y 方向，同一點離邊應是 1.9 − 0.2 = 1.7 m
+    assert oriented_box_distance((1.9, 0.0), (0, 0), 0.9, 0.2, math.pi / 2) == pytest.approx(1.7)
+    assert oriented_box_distance((0.1, 0.1), (0, 0), 0.9, 0.2, 0.7) == 0.0
+
+
+def test_runs_without_a_scene_snapshot_are_skipped_not_guessed(tmp_path):
+    """★★ 沒有 scene.json 的舊錄影要**跳過**，不可拿現在的 variant() 重算。
+
+    2026-09-23 障礙改成分層抽樣 + 道具之後，同一個 run_index 在新舊程式碼
+    裡位置完全不同 —— 重算會把障礙放錯位置、算出錯的距離，而且不報錯。
+    """
+    import json
+
+    from nearest_source import decompose_run
+
+    d = tmp_path / "sa4r2_mixed_run04"
+    (d / "nav").mkdir(parents=True)
+    (d / "run.json").write_text(json.dumps(
+        {"tag": "sa4r2_mixed_run04", "scenario": "mixed", "run_index": 4}))
+    (d / "nav" / "x_leg1_c28_to_c36.csv").write_text(
+        "t,map_x,map_y,vo_state,min_range_m,cmd_v\n0.1,-1.0,5.9,,1.2,0.3\n")
+    (d / "pose.csv").write_text(
+        "t,x,y,z,qw,qx,qy,qz\n0.033,0.1,2.9,-0.19,1,0,0,0\n0.066,0.1,2.95,-0.19,1,0,0,0\n")
+    r = decompose_run(d, lambda x, y: 1.0)
+    assert r is not None and "skipped" in r

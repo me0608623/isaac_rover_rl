@@ -33,9 +33,13 @@ FPS=${FPS:-30}
 SPEED_RATE=${SPEED_RATE:-0.7}
 #: 行人模式。orca(預設)=RVO2 互動避讓；path=固定折線等速往返（對照組用）。
 CROWD_MODE=${CROWD_MODE:-orca}
+# ⚠ /velodyne_points_ideal 是光達的**原始**回波；/velodyne_points 是後處理
+#   （運動模糊）之後的。2026-09-23 查到 4 個 0.447 m 的回波比 PhysX 光達
+#   minRange 0.5 m 在 ±15° 仰角下的最近可能值（0.483 m）還近 —— 只可能是後處理
+#   搬過的點，但舊 bag 沒錄 _ideal，無法直接比對。兩個都錄才驗得了。
 BAG_TOPICS=(
     /clock /tf /tf_static
-    /velodyne_points /filtered_points /ndt_points_map
+    /velodyne_points /velodyne_points_ideal /filtered_points /ndt_points_map
     /ndt_pose /odom /odom_gt /cmd_vel
     /global_path /goal_pose /initialpose
     /vo_safety_node/status /rover_rl_policy/status

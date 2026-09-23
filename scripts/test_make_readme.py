@@ -68,3 +68,29 @@ def test_render_includes_every_run():
     text = render(runs)
     assert "sa4r2_static_run01" in text
     assert "static" in text
+
+
+def test_density_table_comes_from_the_runs_not_a_hardcoded_copy():
+    """★★ 靜/動數量要從各趟 log 算。2026-09-23 README 裡這張表原本是手抄的
+    舊批次數字，重錄（新路線、分層抽樣、道具）之後就全錯了，而且看不出來。"""
+    from make_readme import density_table
+
+    runs = [
+        {"scenario": "static", "run_index": 1, "counts": (4, 0)},
+        {"scenario": "dynamic", "run_index": 1, "counts": (0, 2)},
+        {"scenario": "mixed", "run_index": 1, "counts": (3, 2)},
+        {"scenario": "mixed", "run_index": 2, "counts": None},
+    ]
+    t = "\n".join(density_table(runs))
+    assert "靜4動0" in t and "靜0動2" in t and "靜3動2" in t
+    assert "—" in t                          # 讀不到的格子標「—」，不填 0
+
+
+def test_density_table_shows_disagreeing_models_instead_of_picking_one():
+    """★ 同一格不同模型數字不一樣，代表執行期停用的角色不同 —— 全部列出。"""
+    from make_readme import density_table
+
+    runs = [{"scenario": "mixed", "run_index": 4, "counts": (6, 8)},
+            {"scenario": "mixed", "run_index": 4, "counts": (6, 7)}]
+    t = "\n".join(density_table(runs))
+    assert "靜6動7 / 靜6動8" in t

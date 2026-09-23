@@ -43,6 +43,7 @@ CORRIDOR_SPINE: tuple[tuple[float, float], ...] = (
     (-3.05, 5.55),      # c4
     (-10.73, 4.51),     # c26
     (-16.93, 3.59),     # c27
+    (-20.75, 3.17),     # c36（2026-09-23 延伸；終點）
 )
 
 #: 障礙可放的弧長區間（沿中心線，m）。
@@ -53,7 +54,23 @@ CORRIDOR_SPINE: tuple[tuple[float, float], ...] = (
 #: ⚠ 2026-09-23 路線終點由側邊的 c25 改成 spine 盡頭的 **c27**（s≈17.0）。
 #:   上限留在 16.0 的話障礙離終點只剩 1.03 m，違反 NODE_CLEARANCE_M=1.8，
 #:   `_place_clear_of_nodes` 會擺不下而丟例外。收到 14.5 保留 2.5 m 餘裕。
-OBSTACLE_S_RANGE = (2.0, 14.5)
+#: ⚠ 2026-09-23 終點再延伸到 c36（spine 全長 17.0 → 20.9 m），上限改到終點。
+#:   使用者要求「主要以 c28→c27 為主」—— 這由幾何自然達成，不必硬切：
+#:   站點死區（見 feasible_intervals）使可擺放長度約 80% 在 c28→c27、
+#:   20% 在 c27→c36（[18.1, 19.9]）。離 c27、c36 的淨空由 node_clearance_ok 保證。
+#:   （我先前以為 c27→c36「兩端各要 1.8 m、擺不下」—— 那是只沿中心線算，
+#:    沒算障礙在側邊 1.25~1.5 m 時離站點的直線距離會變大。）
+_SPINE_LEN = sum(math.dist(a, b) for a, b in zip(CORRIDOR_SPINE, CORRIDOR_SPINE[1:]))
+OBSTACLE_S_RANGE = (2.0, round(_SPINE_LEN, 2))
+
+#: 分層抽樣的抖動上限（佔格寬的比例，對格中心左右各這麼多）。
+#: 實際抖動會再被 MIN_OBSTACLE_GAP_M 收窄（見 _jitter_fraction）。
+STRATA_MAX_JITTER = 0.25
+
+#: 零星障礙裡「道具 : 行人」的比例。用**平衡的隨機**：先決定各幾個，
+#: 再隨機決定哪一格是哪一種 —— 純隨機在 run1（只有 1 個零星障礙）
+#: 有一半機率抽不到任何道具，那一趟就完全看不到道具多樣性。
+PROP_SHARE = 0.5
 
 #: 肩並肩的一對「站著的人」：刻意封住走廊的**一側**，逼車走另一邊。
 #: 這比一長串左右交錯的單一障礙更接近真實走廊，也更能考驗繞行決策。
@@ -147,8 +164,16 @@ MAX_START_ATTEMPTS = 60
 
 
 def _far_enough(p, others, gap: float) -> bool:
-    """``p`` 是否離 ``others`` 每一個都至少 ``gap``。"""
-    return all(math.dist(p, q) >= gap for q in others)
+    """``p`` 是否離 ``others`` 每一個都至少 ``gap``。
+
+    ``others`` 的元素可以是 ``(x, y)`` 或 ``(x, y, 額外半徑)``；
+    後者要求的距離是 ``gap + 額外半徑``（大道具要離更遠）。
+    """
+    for q in others:
+        extra = q[2] if len(q) > 2 else 0.0
+        if math.dist(p, q[:2]) < gap + extra:
+            return False
+    return True
 
 
 def spine_length() -> float:
@@ -208,47 +233,69 @@ class SceneVariant:
     standing: tuple[StandingPerson, ...]
 
 
-def shoulder_pair_positions(rng: random.Random | None = None):
-    """回傳肩並肩那一對的兩個位置（同一側、沿走廊並排）。"""
-    s_mid = OBSTACLE_S_RANGE[0] + SHOULDER_PAIR_AT_RATIO * (
-        OBSTACLE_S_RANGE[1] - OBSTACLE_S_RANGE[0])
+def shoulder_pair_positions(rng: random.Random | None = None, s_mid=None):
+    """回傳肩並肩那一對的兩個位置（同一側、沿走廊並排）。
+
+    ``s_mid`` 不給就用 SHOULDER_PAIR_AT_RATIO（舊行為，留給測試與預覽）。
+    分層抽樣時由 variant() 傳入那一對所屬格子抽到的位置。
+    """
+    if s_mid is None:
+        s_mid = OBSTACLE_S_RANGE[0] + SHOULDER_PAIR_AT_RATIO * (
+            OBSTACLE_S_RANGE[1] - OBSTACLE_S_RANGE[0])
     side = 1.0 if (rng is None or rng.random() < 0.5) else -1.0
     half = SHOULDER_PAIR_SPACING_M / 2.0
     return ((s_mid, side * (SHOULDER_PAIR_LATERAL_M - half)),
             (s_mid, side * (SHOULDER_PAIR_LATERAL_M + half)))
 
 
-def _obstacle_positions(n: int, rng: random.Random):
-    """沿**整條**中心線等分後加抖動，左右交錯；中段插一對肩並肩。
+def _jitter_fraction(width: float) -> float:
+    """格寬 ``width`` 時能用多大的抖動（佔格寬比例），保證相鄰間隔 >= MIN_OBSTACLE_GAP_M。
 
-    肩並肩那一對算在總數內（所以 n=3 時是「一對 + 一個」）。
+    相鄰兩格各往內抖 j·w 時最近：間隔 = w − 2·j·w。要 >= MIN_GAP
+    → j <= (w − MIN_GAP) / (2w)。run1 格很寬、抖得多；run4 格窄、幾乎等距。
     """
-    s0, s1 = OBSTACLE_S_RANGE
-    pair = shoulder_pair_positions(rng)
-    n_single = max(0, n - 2)
-    step = (s1 - s0) / max(1, n_single + 1)
-    singles = []
-    for i in range(n_single):
-        s = s0 + step * (i + 1)
-        s += rng.uniform(-0.3, 0.3) * step
-        s = max(s0, min(s1, s))
-        # 不要跟肩並肩那一對重疊
-        if abs(s - pair[0][0]) < MIN_OBSTACLE_GAP_M:
-            s += MIN_OBSTACLE_GAP_M * (1 if s >= pair[0][0] else -1)
-            s = max(s0, min(s1, s))
-        side = 1.0 if i % 2 == 0 else -1.0
-        singles.append((s, side * OBSTACLE_LATERAL_M * rng.uniform(0.85, 1.0)))
-    tagged = [(sp[0], sp[1], "pair") for sp in pair] + \
-             [(sg[0], sg[1], "single") for sg in singles]
-    out = sorted(tagged, key=lambda it: it[0])
-    # 同側相鄰太近才推開；對側相鄰不必（那正是交錯要的效果）
-    for i in range(1, len(out)):
-        if out[i][2] == "pair" and out[i - 1][2] == "pair":
-            continue                     # 並排的一對刻意靠在一起，不要推開
-        same_side = (out[i][1] > 0) == (out[i - 1][1] > 0)
-        need = MIN_OBSTACLE_GAP_M if same_side else MIN_OBSTACLE_GAP_M * 0.7
-        if out[i][0] - out[i - 1][0] < need and out[i][0] != out[i - 1][0]:
-            out[i] = (min(s1, out[i - 1][0] + need), out[i][1], out[i][2])
+    if width <= MIN_OBSTACLE_GAP_M:
+        return 0.0
+    return min(STRATA_MAX_JITTER, (width - MIN_OBSTACLE_GAP_M) / (2.0 * width))
+
+
+def strata(n_slots: int, lo: float, hi: float):
+    """把 [lo, hi] 切成 ``n_slots`` 等份，回傳每格 (下界, 上界)。"""
+    if n_slots < 1:
+        raise ValueError(f"格數要 >= 1，收到 {n_slots}")
+    w = (hi - lo) / n_slots
+    return [(lo + i * w, lo + (i + 1) * w) for i in range(n_slots)]
+
+
+def _slot_candidates(lo: float, hi: float, rng: random.Random):
+    """一格裡的候選弧長：先試抖動抽到的，再以 0.2 m 步長往兩側找（不出格）。"""
+    w = hi - lo
+    first = (lo + hi) / 2.0 + rng.uniform(-1.0, 1.0) * _jitter_fraction(w) * w
+    out = [first]
+    for k in range(1, int(w / 0.2) + 2):
+        for d in (0.2 * k, -0.2 * k):
+            c = first + d
+            if lo <= c <= hi:
+                out.append(c)
+    return out
+
+
+def _obstacle_positions(n: int, rng: random.Random):
+    """（舊介面，保留給預覽）回傳 [(s, 側向, tag)]，不含站點淨空處理。"""
+    n_slots = max(1, n - 1)
+    slots = strata(n_slots, *OBSTACLE_S_RANGE)
+    pair_slot = n_slots // 2
+    out = []
+    k = 0
+    for i, (lo, hi) in enumerate(slots):
+        sc = _slot_candidates(lo, hi, rng)[0]
+        if i == pair_slot:
+            for sp in shoulder_pair_positions(rng, sc):
+                out.append((sp[0], sp[1], "pair"))
+        else:
+            side = 1.0 if k % 2 == 0 else -1.0
+            out.append((sc, side * OBSTACLE_LATERAL_M, "single"))
+            k += 1
     return out
 
 
@@ -263,14 +310,25 @@ def _nearest_node_dist(p, stations) -> float:
     return min(math.hypot(v[0] - p[0], v[1] - p[1]) for v in stations.values())
 
 
-def node_clearance_ok(p, on_route, all_nodes) -> bool:
-    """位置 ``p`` 是否同時滿足兩條淨空要求。
+#: NODE_CLEARANCE_M 的 1.8 裡已經含一個 0.3 m 的障礙半徑。
+_NODE_CLEARANCE_ASSUMED_R = 0.3
 
-    * 路線上的站：>= NODE_CLEARANCE_M（1.8）—— 車真的會去那裡停。
-    * **任何**站：>= ANY_NODE_CLEARANCE_M（1.0）—— 抵達半徑內不該站人。
+
+def node_clearance_ok(p, on_route, all_nodes, extent: float = 0.25) -> bool:
+    """中心在 ``p``、外接半徑 ``extent`` 的障礙是否同時滿足兩條淨空要求。
+
+    * 路線上的站：>= NODE_CLEARANCE_M（1.8，已含 0.3 m 障礙半徑）
+      —— 大於 0.3 的部分另外加上去。
+    * **任何**站：人的**中心** >= ANY_NODE_CLEARANCE_M（1.0，使用者原話是
+      「靜態行人不可站在點位 1.0 m 附近」）；道具以**最近的邊**算，
+      即中心 >= 1.0 + 外接半徑。
+
+    ⚠ 道具不是點：SM_Cupboard 長 1.84 m，只看中心會讓一端壓到站點。
     """
-    return (_nearest_node_dist(p, on_route) >= NODE_CLEARANCE_M
-            and _nearest_node_dist(p, all_nodes) >= ANY_NODE_CLEARANCE_M)
+    route_need = NODE_CLEARANCE_M + max(0.0, extent - _NODE_CLEARANCE_ASSUMED_R)
+    any_need = ANY_NODE_CLEARANCE_M + (extent if extent > 0.25 else 0.0)
+    return (_nearest_node_dist(p, on_route) >= route_need
+            and _nearest_node_dist(p, all_nodes) >= any_need)
 
 
 def _place_clear_of_nodes(s: float, lat: float, on_route, all_nodes=None):
@@ -302,6 +360,200 @@ def _place_clear_of_nodes(s: float, lat: float, on_route, all_nodes=None):
         f"（弧長 {s:.2f}、側向 {lat:+.2f}）")
 
 
+#: 對側相鄰障礙的最小間隔 = MIN_OBSTACLE_GAP_M × 這個比例。
+#: 左右交錯本來就是要車蛇行，對側不必像同側那樣拉開（沿用 2026-09-22 的規則）。
+OPPOSITE_SIDE_GAP_RATIO = 0.7
+
+#: 可擺放區間的取樣步長（m）。
+_FEASIBLE_STEP_M = 0.05
+
+
+def feasible_intervals(on_route, stations, extent: float = 0.25,
+                       s_range=None, step: float = _FEASIBLE_STEP_M):
+    """回傳 ``[(a, b), ...]``：在這些弧長上，左右**至少一側**擺得下外接半徑
+    ``extent`` 的障礙（滿足兩條站點淨空）。
+
+    ⚠⚠ 2026-09-23：走廊上有擺不下任何東西的**死區**——起點附近
+    （路線站 c28、c4 + 側室 c1、c2、c10、c37）、c26 附近（**兩側各有一個
+    側室站 c9、c5**，左右都被封）。按弧長等分的話，落在死區的格子會被擠壞，
+    並排那一對在 run3 就因此擺不下。所以要按「可擺放長度」等分。
+    """
+    lo, hi = s_range or OBSTACLE_S_RANGE
+    mags = (OBSTACLE_LATERAL_M, 1.5, 1.1, 0.85)
+    out, cur = [], None
+    n = int(round((hi - lo) / step))
+    for j in range(n + 1):
+        sv = lo + j * step
+        ok = any(node_clearance_ok(offset_from_spine(sv, side * m), on_route,
+                                   stations, extent)
+                 for side in (1.0, -1.0) for m in mags)
+        if ok and cur is None:
+            cur = sv
+        elif not ok and cur is not None:
+            out.append((cur, sv - step))
+            cur = None
+    if cur is not None:
+        out.append((cur, hi))
+    return out
+
+
+def _measure_to_s(intervals, t: float) -> float:
+    """可擺放長度上的位置 ``t`` → 弧長 s。"""
+    for a, b in intervals:
+        if t <= b - a:
+            return a + t
+        t -= b - a
+    return intervals[-1][1]
+
+
+def measure_slots(intervals, n_slots: int):
+    """把可擺放的**總長**等分成 ``n_slots`` 格，回傳每格的 (起, 迄)（在可擺放長度上）。"""
+    total = sum(b - a for a, b in intervals)
+    if total <= 0:
+        raise RuntimeError("整條走廊沒有任何可擺放的位置")
+    w = total / n_slots
+    return [(i * w, (i + 1) * w) for i in range(n_slots)], total
+
+
+def _gap_ok(prev, sc: float, side: float) -> bool:
+    """與前一個障礙的沿走廊間隔夠不夠。同側要 MIN_OBSTACLE_GAP_M，對側打 7 折。"""
+    if prev is None:
+        return True
+    ps, pside = prev
+    need = MIN_OBSTACLE_GAP_M if pside == side else MIN_OBSTACLE_GAP_M * OPPOSITE_SIDE_GAP_RATIO
+    return sc - ps >= need
+
+
+def _slot_s_candidates(intervals, t0: float, t1: float, rng: random.Random):
+    """一格（可擺放長度 [t0, t1]）的候選弧長：先試抖動抽到的，再往兩側掃。"""
+    w = t1 - t0
+    j = _jitter_fraction(w)
+    t_first = (t0 + t1) / 2.0 + rng.uniform(-1.0, 1.0) * j * w
+    ts = [t_first]
+    k = 1
+    while True:
+        added = False
+        for d in (0.1 * k, -0.1 * k):
+            t = t_first + d
+            if t0 <= t <= t1:
+                ts.append(t)
+                added = True
+        if not added:
+            break
+        k += 1
+    return [_measure_to_s(intervals, t) for t in ts]
+
+
+def _place_obstacles(n: int, rng: random.Random, on_route, stations,
+                     run_index: int) -> list[Obstacle]:
+    """分層抽樣擺 ``n`` 個靜態障礙：**每格一個**，並排那一對佔中間一格。
+
+    ⚠⚠ 2026-09-23 使用者指出分布不平均，實測原本的做法（全長等分 + 抖動，
+    再把並排那一對固定在正中、撞到就推開 2.2 m，最後站點淨空再挪 ±4 m）
+    嚴重結塊：run1 的 3 個障礙擠在 5.1~8.2 m，後面 8.8 m 全空。改成：
+
+    * 先算出**可擺放區間**（扣掉站點死區），把可擺放的**總長**切成 n−1 格
+      （並排那一對共用一格），**每格恰好一個**
+    * 格內抖動自動收窄，保證相鄰間隔（同側 2.2 m、對側 1.54 m）
+    * 站點淨空不夠時**只在格內**找，不跨格 —— 跨格就又結塊了
+    * 零星障礙用平衡的隨機決定是道具還是站立行人；抽到的道具擺不下就
+      換小一點的道具，全部擺不下才退成站立行人
+
+    找不到位置就**大聲失敗**，不要默默擺在站點旁邊。
+    """
+    import props as P
+
+    intervals = feasible_intervals(on_route, stations, 0.25)
+    n_slots = max(1, n - 1)
+    slots, _total = measure_slots(intervals, n_slots)
+    pair_slot = n_slots // 2
+    n_singles = n - 2
+    n_props = math.ceil(n_singles * PROP_SHARE) if n_singles > 0 else 0
+    kinds = ["prop"] * n_props + ["person"] * (n_singles - n_props)
+    rng.shuffle(kinds)
+
+    out: list[Obstacle] = []
+    prev = None
+    single_k = 0
+    idx = 0
+    mags_default = (OBSTACLE_LATERAL_M, 1.5, 1.1, 0.85)
+    for i, (t0, t1) in enumerate(slots):
+        cands = _slot_s_candidates(intervals, t0, t1, rng)
+        if i == pair_slot:
+            side = 1.0 if rng.random() < 0.5 else -1.0
+            half = SHOULDER_PAIR_SPACING_M / 2.0
+            lats = (side * (SHOULDER_PAIR_LATERAL_M - half),
+                    side * (SHOULDER_PAIR_LATERAL_M + half))
+            placed = None
+            for sc in cands:
+                if not _gap_ok(prev, sc, side):
+                    continue
+                pts = [offset_from_spine(sc, la) for la in lats]
+                if all(node_clearance_ok(q, on_route, stations, 0.25) for q in pts):
+                    placed = (sc, pts)
+                    break
+            if placed is None:
+                raise RuntimeError(
+                    f"run{run_index} 第 {i} 格擺不下並排那一對")
+            sc, pts = placed
+            for q in pts:
+                out.append(Obstacle(f"pair_{run_index}_{idx}", round(q[0], 3),
+                                    round(q[1], 3), "person"))
+                idx += 1
+            prev = (sc, side)
+            continue
+
+        kind = kinds[single_k]
+        side = 1.0 if single_k % 2 == 0 else -1.0
+        single_k += 1
+        base_lat = OBSTACLE_LATERAL_M * rng.uniform(0.85, 1.0)
+        # 抽到的道具先試；擺不下就換其他道具（隨機順序）；全部擺不下才退成人。
+        # ⚠ 實測 run3 第一格擺不下外接半徑 1.01 m 的大盆栽，換檔案櫃就擺得下。
+        if kind == "prop":
+            first = rng.choice(P.PROPS)
+            rest = [x for x in P.PROPS if x is not first]
+            rng.shuffle(rest)
+            options = [first] + rest + [None]
+        else:
+            options = [None]
+        placed = None
+        for spec in options:
+            extent = spec.extent_radius if spec else 0.25
+            for sc in cands:
+                if not _gap_ok(prev, sc, side):
+                    continue
+                for mag in (base_lat,) + mags_default[1:]:
+                    q = offset_from_spine(sc, side * mag)
+                    if node_clearance_ok(q, on_route, stations, extent):
+                        placed = (sc, q, spec)
+                        break
+                if placed:
+                    break
+            if placed:
+                break
+        if placed is None:
+            raise RuntimeError(
+                f"run{run_index} 第 {i} 格連站立行人都擺不下"
+                f"——同時要離路線站點 >= {NODE_CLEARANCE_M} m、離任何站點 "
+                f">= {ANY_NODE_CLEARANCE_M} m、離前一個障礙夠遠")
+        sc, q, spec = placed
+        if spec:
+            heading = spine_point(sc)[2]
+            yaw = math.degrees(P.yaw_along(heading, spec))
+            out.append(Obstacle(f"prop_{run_index}_{idx}", round(q[0], 3),
+                                round(q[1], 3), "prop",
+                                height=round(spec.height, 3),
+                                size_x=round(spec.size_x, 3),
+                                size_y=round(spec.size_y, 3),
+                                yaw_deg=round(yaw, 2), asset=spec.name))
+        else:
+            out.append(Obstacle(f"ped_{run_index}_{idx}", round(q[0], 3),
+                                round(q[1], 3), "person"))
+        idx += 1
+        prev = (sc, side)
+    return out
+
+
 def variant(run_index: int, stations=None) -> SceneVariant:
     """產生第 ``run_index`` 趟（1 起算）的場景。同一個 index 永遠一樣。"""
     if run_index < 1:
@@ -313,42 +565,15 @@ def variant(run_index: int, stations=None) -> SceneVariant:
     rng = random.Random(9000 + run_index)
     on_route = route_nodes(stations)
 
-    raw = _obstacle_positions(OBSTACLE_COUNTS[k], rng)
-
-    # 並排的一對要**整體**平移才會維持並排。逐個推開的話就散了。
-    pair_idx = [i for i, it in enumerate(raw) if it[2] == "pair"]
-    if len(pair_idx) == 2:
-        s_pair = raw[pair_idx[0]][0]
-        ds_ok = 0.0
-        for ds in (0.0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, 3.2, -3.2):
-            if all(node_clearance_ok(
-                    offset_from_spine(max(0.0, s_pair + ds), raw[i][1]),
-                    on_route, stations) for i in pair_idx):
-                ds_ok = ds
-                break
-        for i in pair_idx:
-            raw[i] = (max(0.0, s_pair + ds_ok), raw[i][1], "pair")
-
-    obs = []
-    n_single = 0
-    for i, (s, lat, tag) in enumerate(raw):
-        if tag == "pair":
-            x, y = offset_from_spine(s, lat)
-            obs.append(Obstacle(f"pair_{run_index}_{i}", round(x, 3), round(y, 3),
-                                "person"))      # 並排的一定是兩個人
-            continue
-        x, y = _place_clear_of_nodes(s, lat, on_route, stations)
-        if n_single % 3 == 2:   # 零星障礙裡每三個有一個是推車（方箱）
-            obs.append(Obstacle(f"box_{run_index}_{i}", round(x, 3), round(y, 3),
-                                "box", size_x=0.7, size_y=0.5, height=1.55))
-        else:
-            obs.append(Obstacle(f"ped_{run_index}_{i}", round(x, 3), round(y, 3),
-                                "person"))
-        n_single += 1
+    obs = _place_obstacles(OBSTACLE_COUNTS[k], rng, on_route, stations,
+                           run_index)
 
     n_walk = WALKER_COUNTS[k]
     walks = []
-    taken = [(o.map_x, o.map_y) for o in obs]      # 起點也不能壓在障礙上
+    # 起點也不能壓在障礙上。第三個值是「比一個人多出來的外接半徑」——
+    # 道具（最大的盆栽外接半徑 1.01 m）比人（0.25）大得多，只看中心會壓進去。
+    taken = [(o.map_x, o.map_y, max(0.0, o.extent_radius - 0.25)) for o in obs]
+    obstacle_only = list(taken)
     for i in range(n_walk):
         name = WALKER_POOL[i % len(WALKER_POOL)]
         spd = WALKER_SPEEDS[i % len(WALKER_SPEEDS)]
@@ -369,14 +594,16 @@ def variant(run_index: int, stations=None) -> SceneVariant:
             #   但那正是「剛好過門檻」的那一對，等於檢查沒生效。
             cand_a = tuple(round(v, 3) for v in cand_a)
             cand_b = tuple(round(v, 3) for v in cand_b)
-            if _far_enough(cand_a, taken, MIN_WALKER_START_GAP_M):
+            # 終點也要避開障礙：終點壓在大道具裡，ORCA 行人會卡在那裡一直推。
+            if (_far_enough(cand_a, taken, MIN_WALKER_START_GAP_M)
+                    and _far_enough(cand_b, obstacle_only, MIN_WALKER_START_GAP_M)):
                 a, b = cand_a, cand_b
                 break
         if a is None:
             raise RuntimeError(
                 f"run{run_index} 第 {i} 個行人試了 {MAX_START_ATTEMPTS} 次都找不到"
                 f"離其他人/障礙 {MIN_WALKER_START_GAP_M} m 以上的起點")
-        taken.append(a)
+        taken.append((a[0], a[1], 0.0))
         walks.append(CharacterWalk(
             name, (a, b),
             speed=spd, phase_s=round(rng.uniform(0.0, 12.0), 2)))

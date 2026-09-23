@@ -59,3 +59,36 @@ def test_ccw_rect_covers_the_requested_extent():
     ys = [p[1] for p in v]
     assert min(xs) == pytest.approx(4.5) and max(xs) == pytest.approx(5.5)
     assert min(ys) == pytest.approx(-3.5) and max(ys) == pytest.approx(-0.5)
+
+
+def test_oriented_rect_stays_counter_clockwise_for_any_yaw():
+    """★★ RVO2 的障礙繞反了 agent 會被推進障礙裡（等於穿牆），而且不報錯。
+    旋轉後必須仍是逆時針。"""
+    import math
+
+    from orca_crowd import oriented_rect, polygon_area
+
+    for yaw in (0.0, 0.3, 1.57, 3.0, -2.2, -3.14):
+        v = oriented_rect(1.0, 2.0, 0.9, 0.2, yaw)
+        assert polygon_area(v) == pytest.approx(4 * 0.9 * 0.2)
+
+
+def test_oriented_rect_matches_ccw_rect_at_zero_yaw():
+    from orca_crowd import ccw_rect, oriented_rect
+
+    a = oriented_rect(1.0, 2.0, 0.5, 0.3, 0.0)
+    b = ccw_rect(1.0, 2.0, 0.5, 0.3)
+    for p, q in zip(a, b):
+        assert p == pytest.approx(q)
+
+
+def test_oriented_rect_rotates_the_long_side():
+    import math
+
+    from orca_crowd import oriented_rect
+
+    v = oriented_rect(0.0, 0.0, 1.0, 0.1, math.pi / 2)   # 長邊轉到 y 方向
+    ys = [p[1] for p in v]
+    xs = [p[0] for p in v]
+    assert max(ys) - min(ys) == pytest.approx(2.0)
+    assert max(xs) - min(xs) == pytest.approx(0.2)
