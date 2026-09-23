@@ -27,3 +27,6 @@ __pycache__/
 
 # 論文錄影產物（影片 / rosbag / PNG 序列，勿入版控）
 recordings/
+recordings_abl/
+# 但說明文件要進版控 —— 它記的是結果與量測方法，不是媒體
+!recordings/README.md

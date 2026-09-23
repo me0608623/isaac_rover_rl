@@ -1,0 +1,10 @@
+  sa5r2_static_run03             chase       5403 幀  亮度  141.39
+  sa5r2_static_run03             oblique     5403 幀  亮度  137.80
+  sa5r2_static_run03             topdown     5403 幀  亮度  160.91
+  sa5r2_static_run04             chase       7712 幀  亮度  150.65
+  sa5r2_static_run04             oblique     7712 幀  亮度  133.42
+  sa5r2_static_run04             topdown     7712 幀  亮度  163.13
+
+合計 108 段，正常 108 段
+
+[exited with code 0]

@@ -25,6 +25,8 @@ FPS=${FPS:-30}
 #: 直接比會被速度上限混淆。2026-09-22 使用者指定**統一 0.7**。
 #: 走 launch 的覆寫參數，不動車端 yaml —— 那是實車契約，不該為了錄影改。
 SPEED_RATE=${SPEED_RATE:-0.7}
+#: 行人模式。orca(預設)=RVO2 互動避讓；path=固定折線等速往返（對照組用）。
+CROWD_MODE=${CROWD_MODE:-orca}
 BAG_TOPICS=(
     /clock /tf /tf_static
     /velodyne_points /filtered_points /ndt_points_map
@@ -69,6 +71,7 @@ pass_one () {
 
     say "  [1a] Isaac（不算圖，全速）"
     nohup ./run_sim.sh --scenario "$SCEN" --run-index "$IDX" \
+          --crowd-mode "$CROWD_MODE" \
           --pose-log "$POSE" --crowd-log "$CROWD" \
           > "$DIR/isaac_nav.log" 2>&1 &
     local pid=$! ok=0
@@ -129,7 +132,16 @@ pass_one () {
     sed -n '/^段  /,$p' "$DIR/nav.log" | head -5 | tee -a "$BATCH_LOG"
 
     pkill -INT -f "ros2 ba[g] record" 2>/dev/null
-    sleep 5
+    # 等 bag 真的收尾（寫出 metadata.yaml）。固定 sleep 5 不夠：
+    # 200~300 MB 的 bag 做 file 級 zstd 壓縮可能更久，被後續 kill 砍掉就會
+    # 留下沒有 metadata 的檔，rosbag2 之後開不起來。
+    for _ in $(seq 1 45); do
+        [ -f "$BAG/$TAG/metadata.yaml" ] && break
+        pgrep -f "ros2 ba[g] record" >/dev/null || break
+        sleep 2
+    done
+    [ -f "$BAG/$TAG/metadata.yaml" ] \
+        || say "  ⚠ bag 沒收尾（缺 metadata.yaml），事後需 ros2 bag reindex"
     ./sim_deploy_stop.sh >/dev/null 2>&1
     pkill -INT -f "run_isaac_si[m].py" 2>/dev/null
     for _ in $(seq 1 24); do
@@ -201,7 +213,7 @@ meta = {
                  if (d / "pose.csv").exists() else 0,
     "crowd_rows": sum(1 for _ in (d / "crowd.csv").open()) - 1
                   if (d / "crowd.csv").exists() else 0,
-    "crowd_mode": "orca",
+    "crowd_mode": __import__("os").environ.get("CROWD_MODE", "orca"),
     "run_index": int(__import__("sys").argv[7]) if len(__import__("sys").argv) > 7 else 0,
     "nav_summary": [l.rstrip() for l in nav.splitlines()
                     if l.strip() and not l.startswith("[")],

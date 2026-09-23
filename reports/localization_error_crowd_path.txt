@@ -1,0 +1,28 @@
+[INFO] [1790142590.033773509] [rosbag2_compression]: Decompressing recordings_abl/crowd_path/sa4r2_dynamic_run01/bag/sa4r2_dynamic_run01/sa4r2_dynamic_run01_0.mcap.zstd
+[INFO] [1790142591.551096406] [rosbag2_compression]: Decompressing recordings_abl/crowd_path/sa4r2_dynamic_run02/bag/sa4r2_dynamic_run02/sa4r2_dynamic_run02_0.mcap.zstd
+[INFO] [1790142592.264593248] [rosbag2_compression]: Decompressing recordings_abl/crowd_path/sa4r2_dynamic_run03/bag/sa4r2_dynamic_run03/sa4r2_dynamic_run03_0.mcap.zstd
+[INFO] [1790142593.087706790] [rosbag2_compression]: Decompressing recordings_abl/crowd_path/sa4r2_dynamic_run04/bag/sa4r2_dynamic_run04/sa4r2_dynamic_run04_0.mcap.zstd
+[INFO] [1790142594.262164071] [rosbag2_compression]: Decompressing recordings_abl/crowd_path/sa4r2_mixed_run01/bag/sa4r2_mixed_run01/sa4r2_mixed_run01_0.mcap.zstd
+[INFO] [1790142602.357017237] [rosbag2_compression]: Decompressing recordings_abl/crowd_path/sa4r2_mixed_run02/bag/sa4r2_mixed_run02/sa4r2_mixed_run02_0.mcap.zstd
+[INFO] [1790142603.710018117] [rosbag2_compression]: Decompressing recordings_abl/crowd_path/sa4r2_mixed_run03/bag/sa4r2_mixed_run03/sa4r2_mixed_run03_0.mcap.zstd
+[INFO] [1790142604.672468841] [rosbag2_compression]: Decompressing recordings_abl/crowd_path/sa4r2_mixed_run04/bag/sa4r2_mixed_run04/sa4r2_mixed_run04_0.mcap.zstd
+[INFO] [1790142605.599986241] [rosbag2_compression]: Decompressing recordings_abl/crowd_path/sa4r2_static_run01/bag/sa4r2_static_run01/sa4r2_static_run01_0.mcap.zstd
+[INFO] [1790142607.662895793] [rosbag2_compression]: Decompressing recordings_abl/crowd_path/sa4r2_static_run02/bag/sa4r2_static_run02/sa4r2_static_run02_0.mcap.zstd
+[INFO] [1790142616.058438921] [rosbag2_compression]: Decompressing recordings_abl/crowd_path/sa4r2_static_run03/bag/sa4r2_static_run03/sa4r2_static_run03_0.mcap.zstd
+[INFO] [1790142617.789834002] [rosbag2_compression]: Decompressing recordings_abl/crowd_path/sa4r2_static_run04/bag/sa4r2_static_run04/sa4r2_static_run04_0.mcap.zstd
+tag                           取樣            位置誤差 中位/p95/最大 (m)         前半→後半          朝向誤差 中位/最大 (°)
+sa4r2_dynamic_run01         1830       0.092   0.152   0.222   0.09→ 0.10            0.75    8.10
+sa4r2_dynamic_run02         2072       0.089   0.147   0.208   0.08→ 0.09            0.97    7.44
+sa4r2_dynamic_run03         2875       0.084   0.137   0.242   0.08→ 0.08            0.86    8.53
+sa4r2_dynamic_run04         2788       0.084   0.144   0.215   0.08→ 0.08            1.08    7.66
+sa4r2_mixed_run01           1782       0.094   0.157   0.214   0.09→ 0.10            0.73    8.37
+sa4r2_mixed_run02           2025       0.094   0.144   0.213   0.09→ 0.10            0.86    7.76
+sa4r2_mixed_run03           3302       0.083   0.141   0.205   0.09→ 0.08            1.13    7.85
+sa4r2_mixed_run04           2681       0.081   0.150   0.218   0.08→ 0.09            1.14    8.57
+sa4r2_static_run01          1818       0.092   0.155   0.225   0.09→ 0.10            0.70    7.48
+sa4r2_static_run02          2987       0.091   0.158   0.254   0.09→ 0.09            1.00    7.89
+sa4r2_static_run03          8863       0.082   0.155   0.268   0.08→ 0.09            1.27    7.84
+sa4r2_static_run04          4090       0.078   0.149   0.246   0.08→ 0.08            0.94    7.14
+
+  全部 12 趟：中位誤差 0.086 m，最大 0.268 m
+  後半段比前半段惡化 30% 以上的趟數：0 / 12（漂移會累積的話這裡會偏高）

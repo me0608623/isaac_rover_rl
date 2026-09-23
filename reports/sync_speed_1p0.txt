@@ -1,0 +1,25 @@
+[INFO] [1790143197.877585046] [rosbag2_compression]: Decompressing recordings_abl/speed_1p0/sa4r2_dynamic_run01/bag/sa4r2_dynamic_run01/sa4r2_dynamic_run01_0.mcap.zstd
+[INFO] [1790143198.628853613] [rosbag2_compression]: Decompressing recordings_abl/speed_1p0/sa4r2_dynamic_run02/bag/sa4r2_dynamic_run02/sa4r2_dynamic_run02_0.mcap.zstd
+[INFO] [1790143199.466806668] [rosbag2_compression]: Decompressing recordings_abl/speed_1p0/sa4r2_dynamic_run03/bag/sa4r2_dynamic_run03/sa4r2_dynamic_run03_0.mcap.zstd
+[INFO] [1790143200.154776322] [rosbag2_compression]: Decompressing recordings_abl/speed_1p0/sa4r2_dynamic_run04/bag/sa4r2_dynamic_run04/sa4r2_dynamic_run04_0.mcap.zstd
+[INFO] [1790143200.854511448] [rosbag2_compression]: Decompressing recordings_abl/speed_1p0/sa4r2_mixed_run01/bag/sa4r2_mixed_run01/sa4r2_mixed_run01_0.mcap.zstd
+[INFO] [1790143201.506063267] [rosbag2_compression]: Decompressing recordings_abl/speed_1p0/sa4r2_mixed_run02/bag/sa4r2_mixed_run02/sa4r2_mixed_run02_0.mcap.zstd
+[INFO] [1790143202.161065059] [rosbag2_compression]: Decompressing recordings_abl/speed_1p0/sa4r2_mixed_run03/bag/sa4r2_mixed_run03/sa4r2_mixed_run03_0.mcap.zstd
+[INFO] [1790143202.969588450] [rosbag2_compression]: Decompressing recordings_abl/speed_1p0/sa4r2_mixed_run04/bag/sa4r2_mixed_run04/sa4r2_mixed_run04_0.mcap.zstd
+[INFO] [1790143203.672026796] [rosbag2_compression]: Decompressing recordings_abl/speed_1p0/sa4r2_static_run01/bag/sa4r2_static_run01/sa4r2_static_run01_0.mcap.zstd
+[INFO] [1790143204.338939277] [rosbag2_compression]: Decompressing recordings_abl/speed_1p0/sa4r2_static_run02/bag/sa4r2_static_run02/sa4r2_static_run02_0.mcap.zstd
+[INFO] [1790143205.108134088] [rosbag2_compression]: Decompressing recordings_abl/speed_1p0/sa4r2_static_run03/bag/sa4r2_static_run03/sa4r2_static_run03_0.mcap.zstd
+[INFO] [1790143206.502547972] [rosbag2_compression]: Decompressing recordings_abl/speed_1p0/sa4r2_static_run04/bag/sa4r2_static_run04/sa4r2_static_run04_0.mcap.zstd
+  sa4r2_dynamic_run01: 影片起點模擬時間   59.40 s → bag --start-offset   2.16 s （bag 模擬時間 57.2~210.3 s）
+  sa4r2_dynamic_run02: 影片起點模擬時間   58.20 s → bag --start-offset   0.62 s （bag 模擬時間 57.7~293.8 s）
+  sa4r2_dynamic_run03: 影片起點模擬時間   57.80 s → bag --start-offset   5.07 s （bag 模擬時間 52.7~205.7 s）
+  sa4r2_dynamic_run04: 影片起點模擬時間   58.37 s → bag --start-offset   4.07 s （bag 模擬時間 54.3~228.5 s）
+  sa4r2_mixed_run01: 影片起點模擬時間   59.63 s → bag --start-offset   2.94 s （bag 模擬時間 56.7~197.9 s）
+  sa4r2_mixed_run02: 影片起點模擬時間   61.00 s → bag --start-offset   4.19 s （bag 模擬時間 56.6~200.4 s）
+  sa4r2_mixed_run03: 影片起點模擬時間   57.13 s → bag --start-offset   0.81 s （bag 模擬時間 56.1~240.4 s）
+  sa4r2_mixed_run04: 影片起點模擬時間   56.60 s → bag --start-offset   3.60 s （bag 模擬時間 53.0~202.3 s）
+  sa4r2_static_run01: 影片起點模擬時間   59.00 s → bag --start-offset   2.23 s （bag 模擬時間 56.8~200.4 s）
+  sa4r2_static_run02: 影片起點模擬時間   58.77 s → bag --start-offset   2.47 s （bag 模擬時間 56.3~219.1 s）
+  sa4r2_static_run03: 影片起點模擬時間   60.27 s → bag --start-offset   4.23 s （bag 模擬時間 56.0~341.7 s）
+  sa4r2_static_run04: 影片起點模擬時間   59.67 s → bag --start-offset   4.34 s （bag 模擬時間 55.3~262.9 s）
+已寫入 12 趟的 sync 資訊
