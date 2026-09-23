@@ -63,3 +63,15 @@ def test_every_recorded_run_is_parseable():
         pytest.skip("這台沒有錄影產物")
     bad = [p for p in logs if counts_from_log(p.read_text(errors="replace")) is None]
     assert not bad, f"讀不出場景數量：{[str(p) for p in bad[:5]]}"
+
+
+def test_new_log_format_with_route_and_parked_walkers():
+    """★ 2026-09-23 log 多了「路線」與「停放行人」。舊正規式在新格式上
+    讀不到 → 整趟數量變成 None。停放行人不疊在障礙上，不能被扣掉。
+    6 障礙 + (10 角色 − 0 走) − 4 站立重疊 = 12。"""
+    log = ("[run_isaac_sim] 情境 static／路線 c27／變體 run4：靜態障礙 6/36 啟用　行人走動 關\n"
+           "[run_isaac_sim] 程序化步態：10 人 / 80 個擺動關節 / 0 人沿路徑移動"
+           "　站立人物擺位 4 個　停放行人 2 個　腳底對地 10 個\n")
+    info = parse_log(log)
+    assert info["scenario"] == "static" and info["run_index"] == 4
+    assert counts_from_log(log) == (12, 0)

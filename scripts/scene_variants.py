@@ -231,6 +231,9 @@ class SceneVariant:
     obstacles: tuple[Obstacle, ...]
     walks: tuple[CharacterWalk, ...]
     standing: tuple[StandingPerson, ...]
+    #: static 情境裡「本來會走、但這趟不走」的行人要停在哪裡。
+    #: 不在這裡的會走行人，static 時整個停用（找不到安全位置）。
+    parked: tuple[StandingPerson, ...] = ()
 
 
 def shoulder_pair_positions(rng: random.Random | None = None, s_mid=None):
@@ -495,7 +498,8 @@ _PLACE_SEARCH_CAP = 200_000
 
 
 def _place_obstacles(n: int, rng: random.Random, on_route, stations,
-                     run_index: int, route_key: str = "", s_end=None) -> list[Obstacle]:
+                     run_index: int, route_key: str = "", s_end=None,
+                     must_reach=None) -> list[Obstacle]:
     """分層抽樣擺 ``n`` 個靜態障礙：**每格一個**，並排那一對佔一格。
 
     ⚠⚠ 2026-09-23 使用者指出分布不平均，實測原本的做法（全長等分 + 抖動，
@@ -514,6 +518,9 @@ def _place_obstacles(n: int, rng: random.Random, on_route, stations,
     所有隨機（抖動、道具順序、側向距離）都在搜尋**之前**抽好，搜尋本身
     不消耗亂數，所以結果仍然完全可重現；各格選項的順序與原本貪心法相同，
     原本擺得下的變體結果不變。
+
+    ``must_reach``：至少要有一個障礙的弧長 >= 這個值。c36 路線用它保證
+    c27→c36 延伸段一定有東西 —— 否則延伸段只是空走廊，兩條路線差別只剩距離。
 
     找不到位置就**大聲失敗**，不要默默擺在站點旁邊。
     """
@@ -575,9 +582,9 @@ def _place_obstacles(n: int, rng: random.Random, on_route, stations,
     # ── 2. 回溯搜尋：只剩「與前一個的間距」要在搜尋時檢查 ───────────────
     tried = [0]
 
-    def place(i, prev):
+    def place(i, prev, reached):
         if i == len(slot_opts):
-            return []
+            return [] if reached else None
         for opt in slot_opts[i]:
             tried[0] += 1
             if tried[0] > _PLACE_SEARCH_CAP:
@@ -586,16 +593,19 @@ def _place_obstacles(n: int, rng: random.Random, on_route, stations,
             _, sc, side, _, _ = opt
             if not _gap_ok(prev, sc, side):
                 continue
-            rest = place(i + 1, (sc, side))
+            rest = place(i + 1, (sc, side),
+                         reached or must_reach is None or sc >= must_reach)
             if rest is not None:
                 return [opt] + rest
         return None
 
-    chosen = place(0, None)
+    chosen = place(0, None, False)
     if chosen is None:
         empty = [i for i, o in enumerate(slot_opts) if not o]
         raise RuntimeError(
             f"{route_key} run{run_index} 擺不下 {n} 個障礙（{n_slots} 格）："
+            + (f"延伸段（s >= {must_reach:.2f}）一個都擺不進去；"
+               if must_reach is not None else "")
             + (f"第 {empty} 格連一個通過站點淨空的位置都沒有" if empty else
                f"每格都有可行位置，但任何組合都違反間距規則"
                f"（同側 >= {MIN_OBSTACLE_GAP_M} m、對側 >= "
@@ -644,8 +654,12 @@ def variant(run_index: int, stations=None, route=None) -> SceneVariant:
     route_key = route or _S.DEFAULT_ROUTE
     on_route = route_nodes(stations, route_key)
 
+    s_end = route_s_end(stations, route_key)
+    # 比主路線長的路線（c36）：延伸段至少一個障礙
+    s_main = route_s_end(stations, _S.DEFAULT_ROUTE)
+    must_reach = s_main if s_end > s_main + 0.5 else None
     obs = _place_obstacles(OBSTACLE_COUNTS[k], rng, on_route, stations,
-                           run_index, route_key, route_s_end(stations, route_key))
+                           run_index, route_key, s_end, must_reach)
 
     n_walk = WALKER_COUNTS[k]
     walks = []
@@ -658,16 +672,19 @@ def variant(run_index: int, stations=None, route=None) -> SceneVariant:
         spd = WALKER_SPEEDS[i % len(WALKER_SPEEDS)]
         a = b = None
         for _ in range(MAX_START_ATTEMPTS):
+            # ⚠ 2026-09-23：範圍跟著**路線**走。原本寫死 s∈[1, 19]，c27 路線的
+            #   行人會走過 c27（車根本不去的地方），c36 路線的行人卻到不了
+            #   c27→c36 延伸段（最遠 s≈17.8，c36 在 20.85）。
             if i % 3 == 2:                   # 橫穿
-                s = rng.uniform(4.0, 13.0)
+                s = rng.uniform(4.0, s_end - 3.0)
                 cand_a = offset_from_spine(s, 1.6)
                 cand_b = offset_from_spine(s, -1.6)
             else:                            # 沿走廊
                 s0 = rng.uniform(1.0, 5.0)
-                s1 = s0 + rng.uniform(8.0, 14.0)
+                s1 = s0 + rng.uniform(0.6, 1.0) * (s_end - s0)
                 lat = rng.choice((0.75, -0.75, 1.15, -1.15))
                 cand_a = offset_from_spine(s0, lat)
-                cand_b = offset_from_spine(min(s1, spine_length() - 0.5), lat)
+                cand_b = offset_from_spine(min(s1, s_end - 0.3), lat)
             # ⚠ 要檢查**捨入後**的座標。waypoints 存的是小數 3 位，
             #   拿未捨入的值檢查會讓 0.8500 存成 0.8494 —— 差一點點，
             #   但那正是「剛好過門檻」的那一對，等於檢查沒生效。
@@ -708,7 +725,103 @@ def variant(run_index: int, stations=None, route=None) -> SceneVariant:
         yaw = best_hd + (math.pi / 2.0 if o.map_y < 0 else -math.pi / 2.0)
         standing.append(StandingPerson(pool.pop(), o.map_x, o.map_y,
                                        round(yaw, 4)))
-    return SceneVariant(run_index, tuple(obs), tuple(walks), tuple(standing))
+    parked = _park_walkers(walks, obs, on_route, stations, s_end)
+    return SceneVariant(run_index, tuple(obs), tuple(walks), tuple(standing),
+                        tuple(parked))
+
+
+def spine_coords(p, step: float = 0.05):
+    """map 座標 → (弧長 s, 側向 lat)。lat > 0 在中心線左側。"""
+    best = None
+    for j in range(int(spine_length() / step) + 1):
+        sx, sy, hd = spine_point(j * step)
+        d = math.hypot(p[0] - sx, p[1] - sy)
+        if best is None or d < best[0]:
+            lat = -math.sin(hd) * (p[0] - sx) + math.cos(hd) * (p[1] - sy)
+            best = (d, j * step, lat)
+    return best[1], best[2]
+
+
+#: 停放行人往牆邊靠的側向距離，依偏好排序（與零星障礙相同）
+_PARK_LATERALS = (OBSTACLE_LATERAL_M, 1.5, 1.1)
+_PARK_STEP_M = 0.25
+#: 停放行人與**同側**東西的最小淨空（外接圓之間）。同側排成一列不會讓
+#: 通道變窄，只要不互相穿透、看起來不黏在一起就好。
+_PARK_SAME_SIDE_CLEAR_M = 0.3
+
+
+def _park_walkers(walks, obs, on_route, stations, s_end):
+    """static 情境：會走的行人這趟不走，停在哪裡。
+
+    ⚠⚠ 2026-09-23 c27 static run4 導航失敗：Character_10 停在 USD 原位，
+    剛好在走廊中線（側向 +0.06），與對側的站立行人只剩 ~0.68 m 縫，
+    車過不去。USD 原位不是為這條路線設計的。
+
+    改成把每個人停在**自己那條路徑上**、靠牆（側向 1.25/1.5/1.1）：
+
+    * 站點淨空：與障礙同一套 ``node_clearance_ok``
+    * **對側**：與所有東西沿走廊錯開 >= 1.54 m（障礙的對側規則）——
+      兩側同時有東西才會形成窄門，這條就是可通行保證
+    * **同側**：只要求外接圓不穿透、留 0.3 m。同一面牆排一列不會讓通道變窄；
+      若也套 2.2 m，c27 run4 的 8 個人一個都停不進去
+
+    從路徑上 ``phase_s/12`` 比例的位置開始往兩側找，讓停放位置散開，
+    不會全擠在起點附近。完全確定性（不抽亂數），不影響其他抽樣。
+    找不到位置的人**不出現**（static 時停用），不硬塞。
+    """
+    opp_gap = MIN_OBSTACLE_GAP_M * OPPOSITE_SIDE_GAP_RATIO
+    # (s, side, x, y, 外接半徑)
+    placed = []
+    for o in obs:
+        sc, la = spine_coords((o.map_x, o.map_y))
+        placed.append((sc, 1.0 if la >= 0 else -1.0, o.map_x, o.map_y, o.extent_radius))
+
+    def ok(sc, side, q):
+        for ps, pside, px, py, pr in placed:
+            if pside != side:
+                if abs(sc - ps) < opp_gap:
+                    return False
+            elif math.hypot(q[0] - px, q[1] - py) < pr + 0.25 + _PARK_SAME_SIDE_CLEAR_M:
+                return False
+        return True
+
+    out = []
+    for w in walks:
+        sa, la = spine_coords(w.waypoints[0])
+        sb, _ = spine_coords(w.waypoints[-1])
+        side0 = 1.0 if la >= 0 else -1.0
+        if abs(sb - sa) < 1.0:               # 橫穿：兩側都可以停
+            lo, hi, sides = sa - 3.0, sa + 3.0, (side0, -side0)
+        else:
+            lo, hi, sides = min(sa, sb), max(sa, sb), (side0,)
+        lo, hi = max(lo, OBSTACLE_S_RANGE[0]), min(hi, s_end)
+        if hi < lo:
+            continue
+        start = sa + (sb - sa) * (w.phase_s / 12.0) if abs(sb - sa) >= 1.0 else sa
+        start = min(max(start, lo), hi)
+        n = int((hi - lo) / _PARK_STEP_M) + 1
+        ss = sorted((lo + (hi - lo) * j / max(1, n - 1) for j in range(n)),
+                    key=lambda x: (abs(x - start), x))
+        hit = None
+        for side in sides:
+            for sc in ss:
+                for mag in _PARK_LATERALS:
+                    q = offset_from_spine(sc, side * mag)
+                    if node_clearance_ok(q, on_route, stations, 0.25) and ok(sc, side, q):
+                        hit = (sc, side, q)
+                        break
+                if hit:
+                    break
+            if hit:
+                break
+        if hit is None:
+            continue
+        sc, side, q = hit
+        q = (round(q[0], 3), round(q[1], 3))
+        placed.append((sc, side, q[0], q[1], 0.25))
+        yaw = spine_point(sc)[2] - side * math.pi / 2.0   # 面向走廊中央
+        out.append(StandingPerson(w.name, q[0], q[1], round(yaw, 4)))
+    return out
 
 
 def all_variant_obstacles(n_runs: int = 4, stations=None):

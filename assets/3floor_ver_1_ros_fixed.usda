@@ -512,7 +512,7 @@ over "World"
                 prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Office/Props/SM_FileCabinet_01.usd@
             )
             {
-                matrix4d xformOp:transform = ( (-0.028547246833136697, 0.999592444298299, 0, 0), (-0.999592444298299, -0.028547246833136697, 0, 0), (0, 0, 1, 0), (-1.6408986806239538, 18.64927594411527, -0.3233022176746377, 1) )
+                matrix4d xformOp:transform = ( (0.009322384069946565, 0.9999565456334852, 0, 0), (-0.9999565456334852, 0.009322384069946565, 0, 0), (0, 0, 1, 0), (-1.6676611454167705, 21.156029117235526, -0.3233022176746377, 1) )
                 uniform token[] xformOpOrder = ["xformOp:transform"]
 
                 over "SM_FileCabinet_01"
@@ -528,7 +528,7 @@ over "World"
                 float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
                 double size = 1
                 token visibility = "invisible"
-                matrix4d xformOp:transform = ( (-0.020097261770528233, 0.7037130807860025, 0, 0), (-0.3918402381649332, -0.011190520758589586, 0, 0), (0, 0, 1.341, 0), (-1.641326889326451, 18.664269830779745, 0.3471977823253623, 1) )
+                matrix4d xformOp:transform = ( (0.006562958385242382, 0.7039694081259735, 0, 0), (-0.3919829658883262, 0.003654374555419054, 0, 0), (0, 0, 1.341, 0), (-1.6675213096557213, 21.17102846542003, 0.3471977823253623, 1) )
                 uniform token[] xformOpOrder = ["xformOp:transform"]
             }
         }
@@ -595,7 +595,7 @@ over "World"
             double height = 1.7
             double radius = 0.25
             token visibility = "invisible"
-            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.357261125329174, 18.75263225697799, 0.5266977823253622, 1) )
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1.331766730112364, 21.045803649572207, 0.5266977823253622, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
         }
 

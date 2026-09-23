@@ -536,3 +536,65 @@ def test_walker_endpoints_avoid_big_props():
                     need = MIN_WALKER_START_GAP_M + max(0.0, o.extent_radius - 0.25)
                     assert d >= need - 1e-6, (
                         f"{rk} run{run} 的 {w.name} 端點離 {o.name} 只有 {d:.2f} m")
+
+
+# ── 2026-09-23：路線感知行人、c36 延伸段障礙、static 停放行人 ──────────────
+
+def _stations():
+    return _S_ROUTES.read_station_nodes(_S_ROUTES.ROUTING_STATION_JSON)
+
+
+def test_walkers_stay_within_their_route():
+    """★ c27 路線的行人不能走過 c27（車不去那裡，走了等於白走）。"""
+    from scene_variants import route_s_end, spine_coords
+    st = _stations()
+    for rk, run in ALL_VARIANTS:
+        s_end = route_s_end(st, rk)
+        for w in variant(run, route=rk).walks:
+            for pt in w.waypoints:
+                assert spine_coords(pt)[0] <= s_end + 0.05, (rk, run, w.name, pt)
+
+
+def test_c36_walkers_reach_into_the_extension():
+    """★ c36 路線要有行人走進 c27→c36 延伸段，否則延伸段只剩靜態障礙。"""
+    from scene_variants import route_s_end, spine_coords
+    st = _stations()
+    s_main = route_s_end(st, "c27")
+    for run in (1, 2, 3, 4):
+        far = max(spine_coords(pt)[0] for w in variant(run, route="c36").walks
+                  for pt in w.waypoints)
+        assert far > s_main, (run, far, s_main)
+
+
+def test_every_c36_run_has_an_obstacle_in_the_extension():
+    """★ 使用者要求：c36 每一趟在 c27→c36 延伸段至少一個障礙。"""
+    from scene_variants import route_s_end, spine_coords
+    s_main = route_s_end(_stations(), "c27")
+    for run in (1, 2, 3, 4):
+        ss = [spine_coords((o.map_x, o.map_y))[0]
+              for o in variant(run, route="c36").obstacles]
+        assert max(ss) >= s_main, (run, ss)
+
+
+def test_parked_walkers_are_walkers_and_leave_the_passage_open():
+    """★ static 停放行人：只能是會走的人，且與**對側**任何東西沿走廊錯開
+    >= 1.54 m（兩側同時有東西才會形成窄門，c27 static run4 就是這樣堵死）。"""
+    from scene_variants import (MIN_OBSTACLE_GAP_M, OPPOSITE_SIDE_GAP_RATIO,
+                                node_clearance_ok, route_nodes, spine_coords)
+    st = _stations()
+    need = MIN_OBSTACLE_GAP_M * OPPOSITE_SIDE_GAP_RATIO
+    for rk, run in ALL_VARIANTS:
+        v = variant(run, route=rk)
+        assert {p.name for p in v.parked} <= {w.name for w in v.walks}
+        things = [(spine_coords((o.map_x, o.map_y)), o.extent_radius, (o.map_x, o.map_y))
+                  for o in v.obstacles]
+        for p in v.parked:
+            (sc, la) = spine_coords((p.map_x, p.map_y))
+            assert abs(la) >= 1.05, (rk, run, p.name, la)       # 靠牆，不在中線
+            assert node_clearance_ok((p.map_x, p.map_y), route_nodes(st, rk), st, 0.25)
+            for (s2, l2), r2, xy in things:
+                if (la >= 0) != (l2 >= 0):
+                    assert abs(sc - s2) >= need - 1e-6, (rk, run, p.name, s2)
+                else:
+                    assert math.dist((p.map_x, p.map_y), xy) >= r2 + 0.25 + 0.3 - 1e-6
+            things.append(((sc, la), 0.25, (p.map_x, p.map_y)))

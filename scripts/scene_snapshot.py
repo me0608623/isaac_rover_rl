@@ -93,8 +93,8 @@ def walks_of(snap):
 def placed_standing(snap):
     """被 place_standing 擺位的站立人物 → ``[(名字, map_x, map_y, yaw)]``。
 
-    static 情境裡「停在 USD 原位」的走動人物不在這裡 —— 他們沒被擺位，
-    回放時只要保持啟用、貼地即可。
+    static 情境裡不走的行人也在這裡：2026-09-23 起他們被停放到變體指定的
+    安全位置（``SceneVariant.parked``），不再留在 USD 原位。
     """
     return [(c["name"], c["map_x"], c["map_y"], c["placed_yaw"])
             for c in snap["characters"]

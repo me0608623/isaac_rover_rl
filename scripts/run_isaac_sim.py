@@ -345,6 +345,14 @@ def main() -> int:
         _variant_walks = (_sv.walks if _sv is not None
                           else _S0.DEFAULT_CHARACTER_WALKS)
         _walk_names0 = {w.name for w in _variant_walks}
+        # static：會走的人這趟不走，由變體指定停放位置（見 scene_variants._park_walkers）。
+        #   有停放位置的人等下會被搬走，所以 USD 原位的檢查（太靠近車/站點）不適用；
+        #   沒有停放位置的人整個停用 —— 不准留在 USD 原位（c27 static run4 就是
+        #   被停在中線上的 Character_10 堵死）。
+        _park_names0 = ({p_.name for p_ in _sv.parked}
+                        if (_sv is not None and not scen.walks_enabled) else set())
+        _unparked0 = ((_walk_names0 - _park_names0)
+                      if (_sv is not None and not scen.walks_enabled) else set())
         # 變體指定了名單就照名單，其餘角色整個不出現（讓「生成位置」跟著變）。
         _allowed = ((_walk_names0 | {p_.name for p_ in _sv.standing})
                     if _sv is not None else None)
@@ -375,8 +383,12 @@ def main() -> int:
                 if _allowed is not None and _c.GetName() not in _allowed:
                     _c.SetActive(False)
                     continue
+                if _c.GetName() in _unparked0:
+                    _c.SetActive(False)
+                    continue
                 _t = _cache.GetLocalToWorldTransform(_c).ExtractTranslation()
-                if _rxy and too_close_to_robot((_t[0], _t[1]), _rxy):
+                _parked = _c.GetName() in _park_names0
+                if not _parked and _rxy and too_close_to_robot((_t[0], _t[1]), _rxy):
                     _skipped.append(_c.GetName())
                     _c.SetActive(False)
                     continue
@@ -390,7 +402,7 @@ def main() -> int:
                 #   Character_13 停在新終點 c27 旁 0.995 m —— 抵達半徑就是 1.0 m，
                 #   static 那幾趟會到不了終點。所以豁免要看 walks_enabled。
                 _will_walk = scen.walks_enabled and _c.GetName() in _walk_names0
-                if not _will_walk:
+                if not _will_walk and not _parked:
                     _mx, _my, _ = _S0.world_to_map(_t[0], _t[1], 0.0)
                     if too_close_to_routing_node((_mx, _my), _stations):
                         _nn, _nd = nearest_routing_node((_mx, _my), _stations)
@@ -403,6 +415,8 @@ def main() -> int:
                                [(_t[0], _t[1] + 4.0), (_t[0], _t[1] - 4.0)]))
         if _on_node:
             print(f"[run_isaac_sim] 停用(站在 routing 點位上) {_on_node}")
+        if _unparked0:
+            print(f"[run_isaac_sim] 停用(不走動、找不到安全停放位置) {sorted(_unparked0)}")
 
         # 站立角色擠在一起就挑掉幾個（會走的不算 —— 它們本來就會散開）。
         _stand = [(p_.rsplit("/", 1)[-1], p_) for p_ in _all_chars
@@ -513,12 +527,26 @@ def main() -> int:
                     _standing_yaw[_p.name] = _p.yaw
         if _n_off:
             print(f"[run_isaac_sim] 停用(障礙關閉，站立人物不該存在) {_n_off} 個")
+        # static：不走的行人停到變體指定的安全位置。另外計數 ——
+        #   「站立人物擺位」與人形障礙一對一（統計時要扣掉重複），停放的不是。
+        _n_park = 0
+        if _sv is not None and not scen.walks_enabled:
+            for _p in _sv.parked:
+                if walk_driver.place_standing(_p.name, (_p.map_x, _p.map_y), _p.yaw):
+                    _n_park += 1
+                    _standing_yaw[_p.name] = _p.yaw
+                else:
+                    print(f"[run_isaac_sim] ⚠ 停放失敗 {_p.name}，停用（不准留在 USD 原位）")
+                    _pp = _st2.GetPrimAtPath(f"/World/Characters/{_p.name}")
+                    if _pp and _pp.IsValid():
+                        _pp.SetActive(False)
         # 其餘站著的人降到地板（USD 原本懸空 17~20 cm）
         _n_ground = walk_driver.ground_standing()
         print(f"[run_isaac_sim] 程序化步態：{len(walk_driver)} 人 / "
               f"{walk_driver.segments_driven()} 個擺動關節 / "
               f"{walk_driver.walking()} 人沿路徑移動"
-              f"　站立人物擺位 {_n_place} 個　腳底對地 {_n_ground} 個")
+              f"　站立人物擺位 {_n_place} 個　停放行人 {_n_park} 個"
+              f"　腳底對地 {_n_ground} 個")
     crowd = None
     if (args.crowd_mode == "orca" and walk_driver is not None
             and scen.walks_enabled):
