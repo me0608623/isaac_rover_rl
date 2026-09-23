@@ -73,6 +73,10 @@ def main() -> int:
                          "錄影必須分兩趟：path tracing 會把 RTF 壓到 0.35，"
                          "邊錄邊導航時 cmd_vel 被釘在 0.060 m/s（正常 0.475）"
                          "根本到不了終點。見 pose_log 模組說明。")
+    ap.add_argument("--collision-log", default="",
+                    help="把車身碰到什麼逐步寫成 CSV（重疊查詢 + 物理碰撞回報），"
+                         "並寫 collisions_summary.json。光達 minRange 0.5 m，"
+                         "比那更近的擦撞光達量不到，要靠這個。見 collision_log 模組。")
     ap.add_argument("--scenario", default="mixed",
                     help="錄影情境：static=只有靜態障礙、行人站著；"
                          "dynamic=只有走動的行人、關掉靜態障礙；"
@@ -199,6 +203,13 @@ def main() -> int:
                             rendering_dt=1.0 / args.render_hz,
                             stage_units_in_meters=1.0)
     sim.initialize_physics()
+    if args.collision_log:
+        # ⚠ 碰撞回報的 API 要在 play 之前套，物理引擎才會讀到
+        import sys as _s8
+        _s8.path.insert(0, str(Path(__file__).resolve().parent))
+        from collision_log import apply_contact_report_api
+        _n8 = apply_contact_report_api(omni.usd.get_context().get_stage())
+        print(f"[run_isaac_sim] 碰撞回報套在車的 {_n8} 個剛體上")
     sim.play()
 
 
@@ -644,6 +655,24 @@ def main() -> int:
         except Exception as _e9:              # 快照失敗不該中斷錄影，但要大聲說
             print(f"[run_isaac_sim] ⚠ 場景快照寫入失敗：{_e9!r}")
 
+    coll = None
+    if args.collision_log:
+        try:
+            from collision_log import CollisionLogger
+            from pxr import UsdGeom as _UG8
+            import ros_graph_spec as _S8
+            _walking8 = ({w.name for w in (_sv.walks if _sv is not None
+                                           else _S8.DEFAULT_CHARACTER_WALKS)}
+                         if scen.walks_enabled else set())
+            Path(args.collision_log).parent.mkdir(parents=True, exist_ok=True)
+            coll = CollisionLogger(omni.usd.get_context().get_stage(),
+                                   args.collision_log, _walking8)
+        except Exception as _e8:
+            print(f"[run_isaac_sim] ⚠ 擦撞紀錄啟動失敗：{_e8!r}")
+            coll = None
+    _coll_base = omni.usd.get_context().get_stage().GetPrimAtPath(
+        "/World/charger_rover4_5_0/charger_rover_urdf5/base_link")
+
     print(f"[run_isaac_sim] 開始模擬  physics={args.physics_hz} Hz  render={args.render_hz} Hz")
 
     render_every = args.render_every
@@ -737,6 +766,14 @@ def main() -> int:
             do_render_prev[0] = do_render
             sim.step(render=do_render)
             steps += 1
+            if coll is not None and _coll_base and _coll_base.IsValid():
+                try:
+                    coll.step(sim.current_time, _UG8.XformCache()
+                              .GetLocalToWorldTransform(_coll_base))
+                except Exception as _e7:       # 查詢壞了不中斷導航，但只講一次
+                    if not getattr(coll, "_warned", False):
+                        print(f"[run_isaac_sim] ⚠ 重疊查詢失敗：{_e7!r}")
+                        coll._warned = True
 
             # 實時節流：模擬跑太快時等一下，讓 sim time 貼齊牆鐘。
             if not args.free_run:
@@ -767,6 +804,11 @@ def main() -> int:
     except KeyboardInterrupt:
         print("[run_isaac_sim] 中斷")
     finally:
+        if coll is not None:
+            try:
+                coll.close()
+            except Exception as _e6:
+                print(f"[run_isaac_sim] ⚠ 擦撞紀錄收尾失敗：{_e6!r}")
         if crowd_fp is not None:
             crowd_fp.close()
             print(f"[run_isaac_sim] 行人軌跡已寫入 {args.crowd_log}")

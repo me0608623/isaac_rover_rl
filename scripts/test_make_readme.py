@@ -94,3 +94,19 @@ def test_density_table_shows_disagreeing_models_instead_of_picking_one():
             {"scenario": "mixed", "run_index": 4, "counts": (6, 7)}]
     t = "\n".join(density_table(runs))
     assert "靜6動7 / 靜6動8" in t
+
+
+def test_collision_cell_never_shows_zero_for_a_broken_detector():
+    """★★ 偵測器壞掉時最危險的輸出是「0」—— 看起來很乾淨。"""
+    from make_readme import collision_cell
+
+    broken = {"episodes": 0, "by_category": {},
+              "detector": {"overlap_ok": False, "contact_report_ok": True}}
+    assert collision_cell(broken) == "⚠ 偵測器失效"
+    ok0 = {"episodes": 0, "by_category": {}, "detector": {"overlap_ok": True}}
+    assert collision_cell(ok0) == "0"
+    ok2 = {"episodes": 2, "detector": {"overlap_ok": True},
+           "by_category": {"道具": {"episodes": 1, "seconds": 0.4},
+                           "走動行人": {"episodes": 1, "seconds": 0.1}}}
+    assert collision_cell(ok2) == "**2**（走動行人1、道具1）"
+    assert collision_cell(None) == "—"          # 舊錄影沒有這項

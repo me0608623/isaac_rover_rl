@@ -83,6 +83,7 @@ pass_one () {
     nohup ./run_sim.sh --scenario "$SCEN" --run-index "$IDX" \
           --crowd-mode "$CROWD_MODE" \
           --pose-log "$POSE" --crowd-log "$CROWD" \
+          --collision-log "$DIR/collisions.csv" \
           > "$DIR/isaac_nav.log" 2>&1 &
     local pid=$! ok=0
     for _ in $(seq 1 80); do
@@ -225,6 +226,11 @@ meta = {
     "crowd_rows": sum(1 for _ in (d / "crowd.csv").open()) - 1
                   if (d / "crowd.csv").exists() else 0,
     "crowd_mode": __import__("os").environ.get("CROWD_MODE", "orca"),
+    # 車身碰到什麼（重疊查詢 + 物理碰撞回報），含偵測器心跳。
+    # ⚠ detector.overlap_ok / contact_report_ok 為 false 時，擦撞次數不可信
+    #   —— 那是偵測器沒在工作，不是「沒有擦撞」。
+    "collisions": (json.loads((d / "collisions_summary.json").read_text())
+                   if (d / "collisions_summary.json").exists() else None),
     "run_index": int(__import__("sys").argv[7]) if len(__import__("sys").argv) > 7 else 0,
     "nav_summary": [l.rstrip() for l in nav.splitlines()
                     if l.strip() and not l.startswith("[")],

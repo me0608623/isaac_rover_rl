@@ -54,6 +54,23 @@ def cell_summary(legs):
 SCEN_ZH = {"static": "純靜態", "dynamic": "動態", "mixed": "混合"}
 
 
+def collision_cell(col) -> str:
+    """run.json["collisions"] → 表格的一格。
+
+    ⚠ 偵測器沒在工作時**不可以寫 0** —— 那是最危險的輸出，看起來很乾淨。
+    """
+    if not col:
+        return "—"
+    d = col.get("detector", {})
+    if not d.get("overlap_ok"):
+        return "⚠ 偵測器失效"
+    n = col.get("episodes", 0)
+    if n == 0:
+        return "0"
+    parts = [f"{k}{v['episodes']}" for k, v in sorted(col.get("by_category", {}).items())]
+    return f"**{n}**（" + "、".join(parts) + "）"
+
+
 def density_table(runs):
     """情境 × 趟次的「靜N動M」表。數字取自各趟 log（run["counts"]）。
 
@@ -267,6 +284,12 @@ def render(runs, has_browse_tree: bool = True) -> str:
     A("光達卻讀成 0.42~0.45 m。**論文要講「多近」請用真值幾何的距離**")
     A("（`scripts/nearest_source.py` 的預測值），不要用光達讀值。")
     A("")
+    A("車體半徑約 0.35 m，真實距離 0.26 m 代表車身**可能已經碰到**障礙物。")
+    A("新批次起每一趟都記「真的碰到」（逐趟明細表的欄位，`collisions.csv`）：")
+    A("每一步拿外觀車身大小的盒子問物理引擎有沒有別人的碰撞體，不受光達限制。")
+    A("物理引擎裡的底盤碰撞體只是一片 0.17 × 0.47 m 的薄板，行人又對車做了")
+    A("接觸過濾，所以**不能只看物理碰撞回報**——兩者都會讓擦撞顯示成 0。")
+    A("")
     A("方法本身的誤差：預測−實測的逐趟中位都落在 −0.22 ~ 0.00 m。p05 到 −0.65 m ——")
     A("那是佔據圖上有實機掃描留下的雜物、模擬場景裡沒有，所以「離牆距離」偏小。")
     A("這只會**高估**牆的佔比，不影響「沒有一個碰撞幀是牆」的結論。")
@@ -292,14 +315,19 @@ def render(runs, has_browse_tree: bool = True) -> str:
     A("")
     A("### 逐趟明細")
     A("")
-    A("| tag | 模型 | 情境 | 難度 | 抵達 | 最近障礙 | 碰撞幀 | 影片 |")
-    A("|---|---|---|---|---|---|---|---|")
+    A("| tag | 模型 | 情境 | 難度 | 抵達 | 最近障礙 | 碰撞幀 | 真的碰到 | 影片 |")
+    A("|---|---|---|---|---|---|---|---|---|")
     for r in sorted(runs, key=lambda r: r["tag"]):
         c = cell_summary(r["legs"])
         mr = f"{c['min_range_m']:.2f} m" if c["min_range_m"] is not None else "—"
         A(f"| `{r['tag']}` | {r['model']} | {r['scenario']} | run{r['run_index']:02d} | "
           f"{c['arrived']}/{c['legs']} | {mr} | {c['collision_frames']} | "
-          f"{len(r.get('videos', []))} |")
+          f"{collision_cell(r.get('collisions'))} | {len(r.get('videos', []))} |")
+    A("")
+    A("「真的碰到」= 外觀車身盒子與別人的碰撞體重疊（`scripts/collision_log.py`），")
+    A("不受光達 0.5 m 最小量測距離限制。**「偵測器失效」不是零次**，是那一趟")
+    A("偵測器的心跳沒過（重疊查詢沒看到車自己、或碰撞回報一個輪子貼地事件都沒有），")
+    A("那一趟的擦撞次數不可信。")
     A("")
     A("## 目錄長相")
     A("")
