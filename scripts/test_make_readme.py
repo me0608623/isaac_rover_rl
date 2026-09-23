@@ -101,7 +101,7 @@ def test_collision_cell_never_shows_zero_for_a_broken_detector():
     from make_readme import collision_cell
 
     broken = {"episodes": 0, "by_category": {},
-              "detector": {"overlap_ok": False, "contact_report_ok": True}}
+              "detector": {"overlap_ok": False}}
     assert collision_cell(broken) == "⚠ 偵測器失效"
     ok0 = {"episodes": 0, "by_category": {}, "detector": {"overlap_ok": True}}
     assert collision_cell(ok0) == "0"

@@ -1,35 +1,35 @@
-"""錄影時記下「車身碰到了什麼」——兩個偵測器，各自附心跳。
+"""錄影時記下「車身碰到了什麼」—— 外觀車身盒子的重疊查詢，附心跳與正向對照。
 
 為什麼需要：「碰撞幀」原本是用光達最近距離 <= 0.45 m 判定，但 PhysX 光達
 minRange = 0.5 m（水平最近 0.483 m），讀值在那附近就飽和，比這更近的真實
 距離量不到。2026-09-23 對照真值幾何：7 個碰撞幀的真實表面距離是 0.26~0.39 m，
 而車體半徑是 0.35 m —— **很可能真的擦到了**，光達讀值看不出來。
 
-兩個偵測器：
+做法：每一步拿「外觀車身」大小的盒子問物理引擎「這裡面有沒有別人的碰撞體」
+（場景查詢 overlap_box）。
 
-1. **重疊查詢（主要）**：每一步拿「外觀車身」大小的盒子問物理引擎
-   「這裡面有沒有別人的碰撞體」。
-   ⚠ 不能只靠物理碰撞回報：車在物理引擎裡的底盤碰撞體**只是一片
-   0.17 × 0.47 m 的薄板**，外觀卻是 0.67 × 0.55 m。外殼擦過障礙、薄板沒碰到，
-   物理引擎就沒有紀錄。
-   ⚠ 行人的碰撞體對車做了接觸過濾（無限質量的 kinematic 行人會把車彈飛），
-   **被過濾的配對不會產生碰撞回報** —— 只看回報的話行人擦撞永遠是 0。
-   場景查詢不受過濾影響，所以行人也查得到。
+⚠ 為什麼**不用**物理碰撞回報（PhysxContactReportAPI）—— 2026-09-23 實測後拿掉：
+  * 車停在起點不動 6 秒，碰撞回報記了「撞牆 5.97 秒」：底盤碰撞體是一片
+    往下伸到**地板下 0.38 m** 的薄板，一直插在建物網格 Mesh_015 裡，而地板與牆
+    是同一個網格，分不出來。整批跑下去每一趟都會從頭到尾「撞牆」。
+    同一段時間重疊查詢一筆假的都沒有。
+  * 6 秒冒出 10,025 行 PhysX 警告（getMaterialFromInternalFaceIndex
+    received 0xFFFFffff）；改之前的錄影是 0 行。
+  * 底盤碰撞體只是 0.17 × 0.47 m 的薄板（外觀 0.67 × 0.55 m），外殼擦過、
+    薄板沒碰到就沒有接觸；行人又對車做了接觸過濾，永遠不會回報。
+  * 它的 callback 是 C++ 呼叫的，裡面丟出例外會讓整個 Isaac 當掉（文件寫的
+    ``CONTACT_PERSISTS`` 在這一版叫 ``CONTACT_PERSIST``，第一個事件就當掉）。
 
-2. **物理碰撞回報（佐證）**：PhysxContactReportAPI，記物理引擎真的算到的接觸
-   （例如車真的頂到牆、被推開）。
-
-心跳：偵測器壞掉時最危險的輸出是「0 次擦撞」—— 看起來很乾淨。所以：
-  * 重疊查詢：盒子一定包住車自己的碰撞體，每一步都該查到自己。
-    查不到的步數比例就是偵測器失效的比例。
-  * 碰撞回報：輪子一直貼著地板，一定有「輪子 ↔ 地板」的事件。一個都沒有
-    就代表回報沒生效。
+偵測器壞掉時最危險的輸出是「0 次擦撞」—— 看起來很乾淨。所以要兩種檢查：
+  * **心跳**：盒子一定包住車自己的碰撞體，每一步都該查到自己。
+  * **正向對照**：開跑後故意在一個已知的靜態障礙、和一個走動行人的位置各查一次，
+    必須查得到。只看心跳的話，「查得到自己、查不到別人」（例如別人的碰撞體
+    在查詢不到的群組裡）會被當成正常。
 """
 
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 
 #: 外觀車身（base_link/visuals/mesh_0）在 base_link 座標系的盒子。
@@ -41,7 +41,7 @@ BODY_BOX_HALF = (0.335, 0.277, 0.8045)
 FLOOR_LIFT_M = 0.10
 
 ROBOT_PREFIX = "/World/charger_rover4_5_0"
-HEADER = "t,source,category,object,robot_part,event"
+HEADER = "t,category,object"
 
 #: 每隔多少模擬秒把 CSV 刷進磁碟、覆寫一次摘要。
 #: ⚠ 不能只在結束時寫：批次收尾是 SIGINT、6 秒後 kill -9，Isaac 在那之前
@@ -49,8 +49,9 @@ HEADER = "t,source,category,object,robot_part,event"
 #:   代表 finally 從來沒跑過。只在 close() 寫的話每一趟都拿不到摘要。
 FLUSH_EVERY_S = 1.0
 
-#: 輪子／腳輪貼地的接觸是正常的，不算擦撞（但要數，當心跳）。
-_GROUND_PARTS = ("wheel", "caster")
+#: 開跑後第幾步做正向對照。不能在第 0 步：行人的逐部位碰撞體要等部位驅動器
+#: 跑過一次才會擺到身上。
+CONTROL_AT_STEP = 10
 
 
 def is_self(path: str) -> bool:
@@ -80,12 +81,6 @@ def classify_hit(path: str, walking_names=frozenset()):
     if path.startswith("/World/Env_0"):
         return ("牆", "Mesh_015")
     return ("其他", path)
-
-
-def is_ground_contact(robot_part: str, category: str, normal_z: float) -> bool:
-    """輪子／腳輪與地板（或建物網格的地面）的正常接觸。"""
-    return (any(k in robot_part for k in _GROUND_PARTS)
-            and category in ("地板", "牆") and abs(normal_z) > 0.7)
 
 
 def body_box_world(m):
@@ -145,12 +140,16 @@ def merged_events(episodes, gap_s: float = 0.2) -> list:
 
 
 def summarise(episodes, overlap_steps: int, overlap_self_steps: int,
-              ground_contacts: int) -> dict:
+              controls=None) -> dict:
     """給 run.json 的摘要。偵測器有沒有在工作，要跟結果一起報。
+
+    ``controls``：正向對照 ``{"障礙": True/False/None, "行人": ...}``；
+    None = 場上沒有那種東西、無從對照（例如 dynamic 沒有靜態障礙）。
 
     ``episodes`` 是**合併後的事件數**；``by_category`` 是各類別原始次數
     （同一次事件可能同時出現在兩個類別）。
     """
+    controls = dict(controls or {})
     by_cat: dict = {}
     for cat, _obj, a, b in episodes:
         d = by_cat.setdefault(cat, {"episodes": 0, "seconds": 0.0})
@@ -158,6 +157,7 @@ def summarise(episodes, overlap_steps: int, overlap_self_steps: int,
         d["seconds"] = round(d["seconds"] + (b - a), 3)
     frac = overlap_self_steps / overlap_steps if overlap_steps else 0.0
     ev = merged_events(episodes)
+    controls_ok = all(v is not False for v in controls.values())
     return {
         "episodes": len(ev),
         "seconds": round(sum(b - a for a, b in ev), 3),
@@ -165,39 +165,17 @@ def summarise(episodes, overlap_steps: int, overlap_self_steps: int,
         "detector": {
             "overlap_steps": overlap_steps,
             "overlap_self_seen_ratio": round(frac, 4),
-            "overlap_ok": overlap_steps > 0 and frac >= 0.99,
-            "ground_contacts": ground_contacts,
-            "contact_report_ok": ground_contacts > 0,
+            "positive_controls": controls,
+            "overlap_ok": overlap_steps > 0 and frac >= 0.99 and controls_ok,
         },
     }
 
 
-def apply_contact_report_api(stage) -> int:
-    """在車的每個剛體套 PhysxContactReportAPI（門檻 0 = 全部回報）。回傳套了幾個。
-
-    ⚠ 必須在 ``sim.play()`` **之前**呼叫：物理引擎在 play 時解析 stage，
-    之後才套的 API 不一定被讀到 —— 那樣整批錄影的碰撞回報都是空的
-    （心跳會抓到，但那等於白錄一批）。
-    """
-    from pxr import PhysxSchema, Sdf, UsdPhysics
-
-    n = 0
-    for p in stage.Traverse():
-        if str(p.GetPath()).startswith(ROBOT_PREFIX) and p.HasAPI(UsdPhysics.RigidBodyAPI):
-            PhysxSchema.PhysxContactReportAPI.Apply(p)
-            p.CreateAttribute("physxContactReport:threshold",
-                              Sdf.ValueTypeNames.Float).Set(0.0)
-            n += 1
-    return n
-
-
 class CollisionLogger:
-    """Isaac 執行期用。每一步呼叫 ``step()``，結束呼叫 ``close()``。
-
-    碰撞回報的 API 要先在 play 之前用 ``apply_contact_report_api`` 套好。
-    """
+    """Isaac 執行期用。每一步呼叫 ``step()``，結束呼叫 ``close()``。"""
 
     def __init__(self, stage, csv_path, walking_names=frozenset(), gap_s=0.2):
+        self._stage = stage
         self._walking = frozenset(walking_names)
         self._fp = open(csv_path, "w")
         self._fp.write(HEADER + "\n")
@@ -207,48 +185,15 @@ class CollisionLogger:
         self._last_flush = -1e9
         self.overlap_steps = 0
         self.overlap_self_steps = 0
-        self.ground_contacts = 0
+        self.controls: dict = {}
+        print(f"[collision_log] 重疊查詢盒半邊長 {BODY_BOX_HALF} → {csv_path}")
 
-        from omni.physx import get_physx_simulation_interface
-        self._sub = get_physx_simulation_interface().subscribe_contact_report_events(
-            self._on_contact)
-        print(f"[collision_log] 訂閱碰撞回報；重疊查詢盒半邊長 {BODY_BOX_HALF}"
-              f" → {csv_path}")
-
-    # ── 物理碰撞回報 ──────────────────────────────────────────────────
-    def _on_contact(self, headers, data):
-        from omni.physx.bindings._physx import ContactEventType
-        from pxr import PhysicsSchemaTools as PST
-        for h in headers:
-            c0 = str(PST.intToSdfPath(h.collider0))
-            c1 = str(PST.intToSdfPath(h.collider1))
-            if is_self(c0) == is_self(c1):
-                continue                          # 車自己碰自己、或與車無關
-            robot_part, other = (c0, c1) if is_self(c0) else (c1, c0)
-            cls = classify_hit(other, self._walking)
-            if cls is None:
-                continue
-            nz = 0.0
-            if h.num_contact_data:
-                nz = float(data[h.contact_data_offset].normal[2])
-            if is_ground_contact(robot_part, cls[0], nz):
-                self.ground_contacts += 1         # 心跳：正常貼地
-                continue
-            ev = {ContactEventType.CONTACT_FOUND: "found",
-                  ContactEventType.CONTACT_PERSISTS: "persist",
-                  ContactEventType.CONTACT_LOST: "lost"}.get(h.type, str(h.type))
-            part = robot_part[len(ROBOT_PREFIX):]
-            self._fp.write(f"{self._t:.4f},contact,{cls[0]},{cls[1]},{part},{ev}\n")
-            if ev != "lost":
-                self._tracker.hit(self._t, (cls[0], cls[1]))
-
-    # ── 重疊查詢 ──────────────────────────────────────────────────────
-    def step(self, t: float, base_link_world) -> None:
+    # ── 查詢 ──────────────────────────────────────────────────────────
+    @staticmethod
+    def _query(centre, half, quat_xyzw=(0.0, 0.0, 0.0, 1.0)) -> list:
         import carb
         from omni.physx import get_physx_scene_query_interface
 
-        self._t = t
-        (cx, cy, cz), (qx, qy, qz, qw) = body_box_world(base_link_world)
         hits = []
 
         def report(hit):
@@ -256,18 +201,69 @@ class CollisionLogger:
             return True
 
         get_physx_scene_query_interface().overlap_box(
-            carb.Float3(*BODY_BOX_HALF), carb.Float3(cx, cy, cz),
-            carb.Float4(qx, qy, qz, qw), report, False)
+            carb.Float3(*half), carb.Float3(*centre), carb.Float4(*quat_xyzw),
+            report, False)
+        return hits
+
+    def _positive_controls(self) -> None:
+        """在一個已知的靜態障礙、一個走動行人身上各查一次，必須查得到。"""
+        from pxr import UsdGeom
+
+        cache = UsdGeom.XformCache()
+        # 靜態障礙：第一個啟用中的；道具查它的 Collider，圓柱查它自己
+        obs = None
+        root = self._stage.GetPrimAtPath("/World/SimObstacles")
+        if root and root.IsValid():
+            for c in sorted(root.GetChildren(), key=lambda p: p.GetName()):
+                if c.IsActive():
+                    col = self._stage.GetPrimAtPath(f"{c.GetPath()}/Collider")
+                    obs = (c.GetName(), col if col and col.IsValid() else c)
+                    break
+        if obs is None:
+            self.controls["障礙"] = None
+        else:
+            t = cache.GetLocalToWorldTransform(obs[1]).ExtractTranslation()
+            hits = self._query((t[0], t[1], t[2]), (0.1, 0.1, 0.1))
+            self.controls["障礙"] = any(f"/SimObstacles/{obs[0]}" in h for h in hits)
+        # 走動行人：第一個會走的；查他軀幹那一段
+        ped = None
+        croot = self._stage.GetPrimAtPath("/World/Characters")
+        if croot and croot.IsValid():
+            for c in sorted(croot.GetChildren(), key=lambda p: p.GetName()):
+                if c.IsActive() and c.GetName() in self._walking:
+                    ped = c
+                    break
+        if ped is None:
+            self.controls["行人"] = None
+        else:
+            t = cache.GetLocalToWorldTransform(ped).ExtractTranslation()
+            hits = self._query((t[0], t[1], t[2] + 1.0), (0.25, 0.25, 0.4))
+            self.controls["行人"] = any(
+                h.startswith(f"/World/Characters/{ped.GetName()}/") for h in hits)
+        bad = [k for k, v in self.controls.items() if v is False]
+        print(f"[collision_log] 正向對照 {self.controls}"
+              + (f"　⚠ 查不到{'、'.join(bad)} —— 偵測器對它們是瞎的" if bad else ""))
+
+    def step(self, t: float, base_link_world) -> None:
+        self._t = t
+        (cx, cy, cz), q = body_box_world(base_link_world)
+        hits = self._query((cx, cy, cz), BODY_BOX_HALF, q)
         self.overlap_steps += 1
         if any(is_self(h) for h in hits):
             self.overlap_self_steps += 1          # 心跳：一定包住自己
+        if self.overlap_steps == CONTROL_AT_STEP:
+            try:
+                self._positive_controls()
+            except Exception as e:                # 對照本身壞了也要說
+                self.controls["錯誤"] = False
+                print(f"[collision_log] ⚠ 正向對照失敗：{e!r}")
         seen = set()
         for path in hits:
             cls = classify_hit(path, self._walking)
             if cls is None or cls in seen or cls[0] == "地板":
                 continue
             seen.add(cls)
-            self._fp.write(f"{t:.4f},overlap,{cls[0]},{cls[1]},body,in\n")
+            self._fp.write(f"{t:.4f},{cls[0]},{cls[1]}\n")
             self._tracker.hit(t, cls)
         if t - self._last_flush >= FLUSH_EVERY_S:
             self._last_flush = t
@@ -276,7 +272,7 @@ class CollisionLogger:
 
     def _write_summary(self, episodes, final: bool) -> dict:
         s = summarise(episodes, self.overlap_steps, self.overlap_self_steps,
-                      self.ground_contacts)
+                      self.controls)
         s["final"] = final                  # False = 被 kill 前最後一次的定期存檔
         s["sim_time"] = round(self._t, 3)
         out = self._csv_path.with_name("collisions_summary.json")
@@ -286,13 +282,11 @@ class CollisionLogger:
         return s
 
     def close(self) -> dict:
-        self._sub = None
         self._fp.close()
         s = self._write_summary(self._tracker.close(), final=True)
         d = s["detector"]
         print(f"[collision_log] 擦撞 {s['episodes']} 次 {s['by_category']}　"
-              f"重疊查詢看到自己 {d['overlap_self_seen_ratio']:.1%}"
-              f"{'' if d['overlap_ok'] else ' ⚠ 偵測器沒在工作'}　"
-              f"輪子貼地事件 {d['ground_contacts']}"
-              f"{'' if d['contact_report_ok'] else ' ⚠ 碰撞回報沒生效'}")
+              f"查詢看到自己 {d['overlap_self_seen_ratio']:.1%}　"
+              f"正向對照 {d['positive_controls']}"
+              f"{'' if d['overlap_ok'] else ' ⚠ 偵測器沒在工作'}")
         return s

@@ -74,7 +74,7 @@ def main() -> int:
                          "邊錄邊導航時 cmd_vel 被釘在 0.060 m/s（正常 0.475）"
                          "根本到不了終點。見 pose_log 模組說明。")
     ap.add_argument("--collision-log", default="",
-                    help="把車身碰到什麼逐步寫成 CSV（重疊查詢 + 物理碰撞回報），"
+                    help="把車身碰到什麼逐步寫成 CSV（外觀車身盒子的重疊查詢），"
                          "並寫 collisions_summary.json。光達 minRange 0.5 m，"
                          "比那更近的擦撞光達量不到，要靠這個。見 collision_log 模組。")
     ap.add_argument("--scenario", default="mixed",
@@ -203,13 +203,6 @@ def main() -> int:
                             rendering_dt=1.0 / args.render_hz,
                             stage_units_in_meters=1.0)
     sim.initialize_physics()
-    if args.collision_log:
-        # ⚠ 碰撞回報的 API 要在 play 之前套，物理引擎才會讀到
-        import sys as _s8
-        _s8.path.insert(0, str(Path(__file__).resolve().parent))
-        from collision_log import apply_contact_report_api
-        _n8 = apply_contact_report_api(omni.usd.get_context().get_stage())
-        print(f"[run_isaac_sim] 碰撞回報套在車的 {_n8} 個剛體上")
     sim.play()
 
 
@@ -658,6 +651,8 @@ def main() -> int:
     coll = None
     if args.collision_log:
         try:
+            import sys as _s8
+            _s8.path.insert(0, str(Path(__file__).resolve().parent))
             from collision_log import CollisionLogger
             from pxr import UsdGeom as _UG8
             import ros_graph_spec as _S8

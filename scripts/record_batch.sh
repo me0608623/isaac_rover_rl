@@ -226,8 +226,8 @@ meta = {
     "crowd_rows": sum(1 for _ in (d / "crowd.csv").open()) - 1
                   if (d / "crowd.csv").exists() else 0,
     "crowd_mode": __import__("os").environ.get("CROWD_MODE", "orca"),
-    # 車身碰到什麼（重疊查詢 + 物理碰撞回報），含偵測器心跳。
-    # ⚠ detector.overlap_ok / contact_report_ok 為 false 時，擦撞次數不可信
+    # 車身碰到什麼（外觀車身盒子的重疊查詢），含心跳與正向對照。
+    # ⚠ detector.overlap_ok 為 false 時，擦撞次數不可信
     #   —— 那是偵測器沒在工作，不是「沒有擦撞」。
     "collisions": (json.loads((d / "collisions_summary.json").read_text())
                    if (d / "collisions_summary.json").exists() else None),
