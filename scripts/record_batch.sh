@@ -183,7 +183,7 @@ pass_two () {
 
 run_one () {
     local MODEL="$1" SCEN="$2" TAG="$3" IDX="$4"
-    local DIR="$ROOT/$TAG"
+    local DIR="$ROOT/模型$MODEL/$TAG"
     if [ -s "$DIR/video/${TAG}_chase.mp4" ] && [ -f "$DIR/run.json" ]; then
         say "  $TAG 已完成，跳過"; return 0
     fi
@@ -237,4 +237,6 @@ while IFS=$'\t' read -r MODEL SCEN TAG IDX <&3; do
 done 3< "$PLAN_FILE"
 
 cleanup_all
-say "════ 批次完成：$(ls -d "$ROOT"/*/ 2>/dev/null | wc -l) 個目錄，$(find "$ROOT" -name '*.mp4' | wc -l) 段影片 ════"
+# ⚠ 數目錄要數 run.json，不能數 "$ROOT"/*/ —— 各趟在模型子資料夾底下，
+#   數頂層只會得到「3 個模型」，看起來像只跑了 3 趟。
+say "════ 批次完成：$(find "$ROOT" -name run.json -not -path '*/00_*' | wc -l) 趟，$(find "$ROOT" -name '*.mp4' | wc -l) 段影片 ════"

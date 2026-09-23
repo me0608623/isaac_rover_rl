@@ -23,6 +23,8 @@ import statistics as st
 import sys
 from pathlib import Path
 
+from run_layout import run_dirs
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
@@ -31,7 +33,7 @@ def load_runs(root: Path, model_filter: str | None = None):
     from make_readme import cell_summary, parse_nav_table
 
     out = []
-    for d in sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith("_")):
+    for d in run_dirs(root):
         mp = d / "run.json"
         if not mp.exists():
             continue

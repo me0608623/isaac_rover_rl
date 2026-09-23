@@ -24,6 +24,8 @@ import math
 import sys
 from pathlib import Path
 
+from run_layout import run_dirs
+
 #: pose.csv 記的是 base_link，TF 查的是 base_footprint。兩者水平只差 1.8 mm
 #: （實測 base_link y=2.9452 / base_footprint y=2.9434），對公尺級的定位誤差
 #: 可以忽略，但別在更精細的分析裡沿用這個假設。
@@ -176,7 +178,7 @@ def main(root: Path) -> int:
     print(f"{'tag':26s}{'取樣':>6s}{'位置誤差 中位/p95/最大 (m)':>30s}"
           f"{'前半→後半':>14s}{'朝向誤差 中位/最大 (°)':>24s}")
     rows = []
-    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+    for d in run_dirs(root):
         if d.name.startswith("_"):
             continue
         r = analyse(d)

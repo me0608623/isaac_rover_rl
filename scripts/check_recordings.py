@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from run_layout import run_dirs
+
 #: 平均亮度低於此值視為「沒算出光照」。
 #: 先前全黑時的實測值：整張 0.00，只剩背景天空時 1.00。正常畫面是 110~190。
 DARK_MEAN_LUMA = 5.0
@@ -92,7 +94,7 @@ def main(root: Path) -> int:
     import json
 
     rows = []
-    for d in sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith("_")):
+    for d in run_dirs(root):
         meta_path = d / "run.json"
         if not meta_path.exists():
             print(f"  {d.name}: 沒有 run.json，跳過")

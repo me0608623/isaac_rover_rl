@@ -155,17 +155,23 @@ RTX 光達打到（RTX 光達打的是算圖網格，不是物理碰撞體）。
 ```
 recordings/
     00_影片總覽/               中文命名的符號連結索引（見上面）
-    <模型>_<情境>_run<NN>/     36 趟正式錄影，各趟內容見下
-    _作廢_v1_輪徑未修正_車速偏快11%/    舊批次，勿引用（9.6 G）
-    _作廢_v2_行人走直線_未用ORCA/       舊批次，勿引用（11 G）
+    模型sa4r2/  模型sa4r3/  模型sa5r2/      ← 先按模型分類
+        <模型>_<情境>_run<NN>/ 各 12 趟，內容見下
+    _作廢批次_只留紀錄/       兩份被取代的舊批次，影片與 bag 已刪（省 20 G），
+                              只留 log 與 run.json；數字**勿引用**：
+                              v1 輪徑未修正、車速偏快 11%；v2 行人還走直線未用 ORCA
     batch.log  README.md
 
-recordings_abl/               三組對照（各 12 趟）
+recordings_abl/               三組對照（各 12 趟，單一模型 sa4r2 故無模型層）
     crowd_path/  speed_0p6/  speed_1p0/
 ```
 
+⚠ 「什麼算一趟」的唯一定義在 `scripts/run_layout.py` 的 `run_dirs()` ——
+它會同時看 root 底下與模型子資料夾底下兩層，並排除索引樹裡的符號連結
+（不排除的話每趟會被算兩次）。**新增分析程式請用它，不要自己列目錄。**
+
 ```
-recordings/<模型>_<情境>_run<NN>/
+recordings/模型<模型>/<模型>_<情境>_run<NN>/
     video/<tag>_{topdown,chase,oblique}.mp4
     bag/<tag>/                 ros2 bag（mcap），含 RViz 需要的全部 topic
     nav/<tag>_leg{1,2}_*.csv   逐時刻：位置 / VO / 最近障礙 / 命令速度

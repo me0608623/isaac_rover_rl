@@ -17,6 +17,8 @@ import json
 import sys
 from pathlib import Path
 
+from run_layout import run_dirs
+
 
 def first_frame_sim_time(run_dir: Path) -> float | None:
     f = run_dir / "frame_times.csv"
@@ -56,7 +58,7 @@ def clock_track(bag_dir: Path):
 
 def main(root: Path) -> int:
     n_ok = 0
-    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+    for d in run_dirs(root):
         meta_path = d / "run.json"
         bags = list((d / "bag").glob("*"))
         bag_dir = next((b for b in bags if b.is_dir()), None)

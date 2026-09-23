@@ -23,6 +23,8 @@ from pathlib import Path
 
 from scenarios import SCENARIO_NAMES
 
+from run_layout import run_dir_for
+
 #: 要錄的 RL 模型 profile。
 #:
 #: 取自車端 `deploy_select.sh` 的互動選單（= models/*.ts 排序後扣掉 HIDE_TS），
@@ -61,7 +63,7 @@ class RunSpec:
 
     @property
     def run_dir(self) -> Path:
-        return self.root / self.tag
+        return run_dir_for(self.root, self.model, self.tag)
 
     @property
     def frames_dir(self) -> Path:

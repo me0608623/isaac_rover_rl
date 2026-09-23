@@ -26,8 +26,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from browse_names import ARM_ZH, CAMERA_ZH, run_label, video_name
+from run_layout import BROWSE_DIRNAME, run_dirs
 
-BROWSE_DIRNAME = "00_影片總覽"
 MAIN_DIRNAME = "01_主批次_三模型正式錄影"
 RAW_DIRNAME = "05_每趟原始資料_bag與CSV"
 
@@ -51,14 +51,8 @@ def _link(target: Path, link: Path) -> None:
 
 
 def _runs(root: Path):
-    """依 tag 排序回傳 ``(run_dir, meta)``，跳過沒有 run.json 的。"""
-    out = []
-    for d in sorted(p for p in root.iterdir()
-                    if p.is_dir() and not p.name.startswith(("_", "0"))):
-        mp = d / "run.json"
-        if mp.exists():
-            out.append((d, json.loads(mp.read_text())))
-    return out
+    """回傳 ``(run_dir, meta)``。「什麼算一趟」的定義在 `run_layout`。"""
+    return [(d, json.loads((d / "run.json").read_text())) for d in run_dirs(root)]
 
 
 def build(root: Path, arm_roots: dict[str, Path]) -> dict[str, int]:

@@ -41,6 +41,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from run_layout import run_dirs
+
 #: 走動行人在光達帶裡的等效半徑（m）。逐部位碰撞體，肩寬實測 0.45 m。
 PED_RADIUS_M = 0.22
 
@@ -337,10 +339,7 @@ def main(root: Path) -> int:
     hdr = f"{'tag':28s}{'取樣':>5s}" + "".join(f"{c:>9s}" for c in CATEGORIES)
     print(hdr + f"{'對齊殘差':>10s}{'≤0.45m 的來源':>16s}")
     print("-" * (len(hdr) + 30))
-    for d in sorted(p for p in root.iterdir()
-                    if p.is_dir() and not p.name.startswith("_")):
-        if not (d / "run.json").exists():
-            continue
+    for d in run_dirs(root):
         r = decompose_run(d, wall_q, homes)
         if r is None:
             continue
