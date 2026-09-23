@@ -5,13 +5,51 @@ Isaac Sim 裡跑**與實車同一套 ROS stack**（ndt_localizer + campusrover_r
 
 **3 模型 × 3 情境 × 4 難度 × 3 視角 = 108 段影片**，每趟附一份命名同步的 rosbag。
 
+## 要挑影片看 → 先進 `00_影片總覽/`
+
+那裡面是**中文命名的符號連結**，檔名直接寫清楚是哪個模型、什麼情境、
+第幾趟、場上幾個障礙幾個行人、哪個視角：
+
+```
+00_影片總覽/
+    01_主批次_三模型正式錄影/模型sa5r2/靜動態混合_第4趟_障礙6行人8_俯視.mp4
+    02_對照_行人走固定路線/   03_對照_速度0.6/   04_對照_速度1.0/
+    05_每趟原始資料_bag與CSV/模型sa5r2_靜動態混合_第4趟_障礙6行人8/
+```
+
+| 中文 | 原文 | 意思 |
+|---|---|---|
+| 靜態障礙 | `static` | 有靜態障礙，行人站著不走 |
+| 動態行人 | `dynamic` | 沒有靜態障礙，行人用 ORCA 互動避讓 |
+| 靜動態混合 | `mixed` | 兩者都有 |
+| 俯視 / 車後 / 斜前方 | `topdown` / `chase` / `oblique` | 三個機位 |
+
+重建索引（重錄後跑一次就好，只建連結、不複製檔案）：
+
+```bash
+python3 scripts/make_browse_tree.py
+```
+
+⚠ **真資料夾名（`sa4r2_mixed_run04`）刻意不改成中文。** tag 被寫進
+`run.json` 的 `tag` 欄、`nav/<tag>_leg?_*.csv`、`video/<tag>_*.mp4`，而
+`record_batch.sh ONLY=<tag>` 與所有分析程式都靠它對應；改名會讓「重跑某一趟」
+和全部分析失效，而且重跑批次又會把舊名字生回來。
+
 ## 場景
 
-| 情境 | 靜態障礙 | 行人 |
-|---|---|---|
-| `static` | 有 | 站著（不走動）|
-| `dynamic` | 無 | ORCA 互動避讓 |
-| `mixed` | 有 | ORCA 互動避讓 |
+| 情境 | 障礙圓柱/箱 | 站立人物 | 走動人物 |
+|---|---|---|---|
+| `static` | 啟用 | 在障礙位置 | **站在 USD 原位、不走動** |
+| `dynamic` | 全部關閉 | **仍在場** | ORCA 互動避讓 |
+| `mixed` | 啟用 | 在障礙位置 | ORCA 互動避讓 |
+
+⚠ 兩件容易誤會、2026-09-23 逐幀查證過的事（寫論文敘述時要照這個）：
+
+- `dynamic` 的 log 印「靜態障礙 0/18 啟用」**只關掉圓柱**，
+  `place_standing` 擺的站立人物還在場上，光達照樣打得到。
+- `static` 的走動人物不是消失，而是**停在 USD 原始位置**；
+  其中 Character_10~13、19 的原位剛好就在**走廊中線上**——
+  這就是 static 那幾趟耗時最長、最近距離最差的原因。
 
 每趟（run01→run04）的障礙與行人**數量遞增、位置各不相同**：
 3/4/5/6 個障礙、2/4/6/8 個走動行人。走廊中段固定有**兩人肩並肩站在一側**，
@@ -53,6 +91,9 @@ RTX 光達打到（RTX 光達打的是算圖網格，不是物理碰撞體）。
 方法本身的誤差：預測−實測的逐趟中位都落在 −0.22 ~ 0.00 m。p05 到 −0.65 m ——
 那是佔據圖上有實機掃描留下的雜物、模擬場景裡沒有，所以「離牆距離」偏小。
 這只會**高估**牆的佔比，不影響「沒有一個碰撞幀是牆」的結論。
+
+重算：`PYTHONPATH= .venv/bin/python scripts/nearest_source.py recordings`
+（完整報表在 `reports/nearest_source.txt`）
 
 ### 依模型 × 情境彙總
 
@@ -112,6 +153,18 @@ RTX 光達打到（RTX 光達打的是算圖網格，不是物理碰撞體）。
 ## 目錄長相
 
 ```
+recordings/
+    00_影片總覽/               中文命名的符號連結索引（見上面）
+    <模型>_<情境>_run<NN>/     36 趟正式錄影，各趟內容見下
+    _作廢_v1_輪徑未修正_車速偏快11%/    舊批次，勿引用（9.6 G）
+    _作廢_v2_行人走直線_未用ORCA/       舊批次，勿引用（11 G）
+    batch.log  README.md
+
+recordings_abl/               三組對照（各 12 趟）
+    crowd_path/  speed_0p6/  speed_1p0/
+```
+
+```
 recordings/<模型>_<情境>_run<NN>/
     video/<tag>_{topdown,chase,oblique}.mp4
     bag/<tag>/                 ros2 bag（mcap），含 RViz 需要的全部 topic
@@ -134,7 +187,12 @@ ros2 bag play recordings/<tag>/bag/<tag> --clock \
 ```bash
 bash scripts/record_batch.sh                    # 整批（已完成的自動跳過）
 ONLY=sa4r2_mixed_run02 bash scripts/record_batch.sh   # 只重跑某一趟
+python3 scripts/make_browse_tree.py                   # 重建中文索引
+python3 scripts/make_readme.py recordings > recordings/README.md
 ```
+
+⚠ 這份 README 是 `make_readme.py` 產生的 —— **不要手改**，改了下次重新產生
+就會被蓋掉。要改內容請改 `scripts/make_readme.py` 的 `render()`。
 
 ⚠ 一趟要跑**兩遍**（見 `scripts/pose_log.py` 檔頭）：path tracing 會把
 RTF 壓到 0.35，邊導航邊算圖時 cmd_vel 被釘在 0.060 m/s（正常 0.475），
