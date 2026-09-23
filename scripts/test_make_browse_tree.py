@@ -64,7 +64,7 @@ def test_raw_data_link_points_at_the_run_directory(tmp_path):
             chars=8, walking=4, standing=4)
     build(root, {})
     link = (root / BROWSE_DIRNAME / RAW_DIRNAME
-            / "模型sa4r2_純動態_ORCA互動_第2趟_靜4動4")
+            / "模型sa4r2_動態_ORCA互動_第2趟_靜4動4")
     assert link.resolve().name == "sa4r2_dynamic_run02"
 
 

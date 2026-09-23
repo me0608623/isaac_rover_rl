@@ -49,7 +49,7 @@ def test_unknown_counts_are_not_faked_as_zero():
 
 def test_run_label_examples():
     assert run_label("mixed", 4, (6, 8), "orca") == "混合_ORCA互動_第4趟_靜6動8"
-    assert run_label("dynamic", 4, (5, 8), "orca") == "純動態_ORCA互動_第4趟_靜5動8"
+    assert run_label("dynamic", 4, (5, 8), "orca") == "動態_ORCA互動_第4趟_靜5動8"
 
 
 def test_dynamic_scenario_still_reports_its_static_bodies():
@@ -80,3 +80,23 @@ def test_arm_dir_names_sort_in_design_order():
     """★ 編號前綴讓三組對照照設計順序排，而不是按注音/筆畫亂排。"""
     assert sorted(ARM_DIR.values()) == [
         ARM_DIR["crowd_path"], ARM_DIR["speed_0p6"], ARM_DIR["speed_1p0"]]
+
+
+def test_dynamic_is_not_called_pure():
+    """★★ `dynamic` 不可以叫「純動態」。
+
+    2026-09-23 使用者指出 `純動態_ORCA互動_第1趟_靜3動2` 自我矛盾。
+    `dynamic` 只關掉障礙圓柱/箱；`run_isaac_sim` 的 `place_standing` 不看
+    `obstacles_enabled`，照樣擺 3~5 個站立人物 —— 場上仍有靜止的人形障礙。
+    """
+    assert "純" not in SCENARIO_ZH["dynamic"]
+    name = video_name("dynamic", 1, "topdown", (3, 2), "orca")
+    assert "純" not in name, name
+    assert "靜3" in name
+
+
+def test_static_may_keep_pure_because_it_really_is():
+    """★ `static` 的動態數確實是 0，叫「純靜態」不算說謊。
+    不對稱反映事實，比對稱但說謊好。"""
+    assert SCENARIO_ZH["static"] == "純靜態"
+    assert video_name("static", 2, "topdown", (8, 0), "orca").startswith("純靜態")

@@ -17,9 +17,19 @@
 
 from __future__ import annotations
 
+#: 情境的中文名。
+#:
+#: ⚠ `dynamic` **不可以叫「純動態」**。2026-09-23 使用者指出
+#: `純動態_ORCA互動_第1趟_靜3動2` 自我矛盾：說「純動態」卻有 3 個靜態。
+#: 事實是 `dynamic` 只關掉障礙圓柱/箱，`run_isaac_sim` 的 `place_standing`
+#: **不看 `obstacles_enabled`**，照樣把 3~5 個站立人物擺到那些位置上 ——
+#: 所以場上仍有靜止的人形障礙。名字不能宣稱它沒有。
+#:
+#: `static` 叫「純靜態」是名副其實的（動態數確實是 0）。
+#: 這種不對稱反映的是事實，比對稱但說謊好。
 SCENARIO_ZH = {
     "static": "純靜態",
-    "dynamic": "純動態",
+    "dynamic": "動態",
     "mixed": "混合",
 }
 
