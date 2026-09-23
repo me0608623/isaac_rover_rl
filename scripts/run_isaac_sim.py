@@ -837,6 +837,13 @@ def main() -> int:
                 break
     except KeyboardInterrupt:
         print("[run_isaac_sim] 中斷")
+    except Exception:
+        # finally 會 app.close() 直接結束行程，例外不在這裡印就永遠看不到
+        import traceback
+        print("[run_isaac_sim] ⚠ 主迴圈例外：", flush=True)
+        traceback.print_exc()
+        sys.stdout.flush()
+        raise
     finally:
         if coll is not None:
             try:

@@ -280,6 +280,12 @@ class CharacterWalkDriver:
 
         base = base_pose_angles()
         for k, (anim, rest_rot, targets, speed, walk, op, name, foot) in enumerate(self._chars):
+            # ⚠⚠ 2026-09-23：建好驅動器之後才被 SetActive(False) 的角色（dynamic
+            #   關掉站立人物、static 停放失敗）prim 已失效，對它 Set 會丟例外 ——
+            #   而主迴圈的 finally 會先 app.close()，例外根本印不出來，
+            #   整趟 14 秒就結束（c27 dynamic 前 4 趟全滅）。
+            if not anim.GetPrim().IsValid():
+                continue
             ext = poses.get(name) if poses else None
 
             # 沿路徑移動：角色原點在腳底，z 直接取地板高度。
