@@ -42,27 +42,35 @@ python3 scripts/patch_record_batch.py scripts/record_batch.sh 2>&1 | tee -a "$LO
 bash -n scripts/record_batch.sh && say "  語法 OK" || { say "  ⚠ 語法壞了，跳過對照組"; exit 1; }
 
 # ── 6~8. 三個對照組（各 12 趟 / 36 段，只用 sa4r2）─────────────────
+# 對照組的資料夾名（中文）。唯一定義在 scripts/browse_names.py 的 ARM_DIR；
+# 這裡問它一次，避免兩邊各寫一份而哪天對不上。
+arm_dir () {
+    PYTHONPATH="$WS/scripts" .venv/bin/python -c \
+        "from browse_names import ARM_DIR; print(ARM_DIR['$1'])"
+}
+
 run_arm () {
     local NAME="$1" ; shift
+    local DIR; DIR="$WS/recordings_abl/$(arm_dir "$NAME")"
     stage "$NAME"
     # ⚠ 必須用 env：`A=1 "$@" bash ...` 這種寫法裡，"$@" 展開出來的
     #   `CROWD_MODE=path` 會被當成**命令名**（assignment 前綴只認字面值），
     #   2026-09-23 實測報 "CROWD_MODE=path：指令找不到"，三個對照組全都
     #   沒跑卻印「完成 0 段」。env 會把 VAR=VAL 當參數正確處理。
-    env ROOT="$WS/recordings_abl/$NAME" ONLY=sa4r2 "$@" \
+    env ROOT="$DIR" ONLY=sa4r2 "$@" \
         bash scripts/record_batch.sh >> "$WS/reports/abl_$NAME.log" 2>&1
-    local n; n=$(find "$WS/recordings_abl/$NAME" -name '*.mp4' 2>/dev/null | wc -l)
+    local n; n=$(find "$DIR" -name '*.mp4' 2>/dev/null | wc -l)
     if [ "$n" -lt 3 ]; then
         say "  ⚠ $NAME 只產出 $n 段影片 —— 這一組失敗了，見 reports/abl_$NAME.log"
         tail -5 "$WS/reports/abl_$NAME.log" | tee -a "$LOG"
         return 1
     fi
     say "  $NAME 完成：$n 段影片"
-    python3 scripts/make_sync.py "recordings_abl/$NAME" 2>&1 | grep -c 已寫入 >/dev/null
-    python3 scripts/localization_error.py "recordings_abl/$NAME" \
+    python3 scripts/make_sync.py "$DIR" 2>&1 | grep -c 已寫入 >/dev/null
+    python3 scripts/localization_error.py "$DIR" \
         > "reports/localization_error_$NAME.txt" 2>&1
-    python3 scripts/make_readme.py "recordings_abl/$NAME" \
-        > "$WS/recordings_abl/$NAME/README.md" 2>/dev/null
+    python3 scripts/make_readme.py "$DIR" \
+        > "$DIR/README.md" 2>/dev/null
 }
 
 run_arm "crowd_path"  CROWD_MODE=path
@@ -72,5 +80,5 @@ run_arm "speed_1p0"   SPEED_RATE=1.0
 say "═══ 夜間排程全部完成 ═══"
 say "主批次 $(find "$WS/recordings" -name '*.mp4' -not -path '*_v[12]_*' | wc -l) 段"
 for a in crowd_path speed_0p6 speed_1p0; do
-    say "  對照組 $a：$(find "$WS/recordings_abl/$a" -name '*.mp4' 2>/dev/null | wc -l) 段"
+    say "  對照組 $a：$(find "$WS/recordings_abl/$(arm_dir "$a")" -name '*.mp4' 2>/dev/null | wc -l) 段"
 done
