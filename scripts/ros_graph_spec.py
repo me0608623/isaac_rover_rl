@@ -458,12 +458,48 @@ class Obstacle:
 #: 最小淨空 2.25 m、建物網格與 NavFloor 都涵蓋，是同一條走廊的延續，
 #: 路線 17.0 → 20.9 m。障礙仍**主要擺在 c28→c27**（見 OBSTACLE_S_RANGE）——
 #: c27→c36 只有 3.8 m，兩端各要 1.8 m 淨空，本來就擺不下，留作進站路段。
-ROUTE_START = "c28"
-ROUTE_GOAL = "c36"
+#:
+#: ⚠ 2026-09-23 使用者更正：要的是**兩條路線都錄**（c28↔c27 為主、c28↔c36 為輔），
+#:   不是把終點延長。我先前只做了 c28↔c36 一條，跑了 3 趟才發現。
+#:   所以路線是每一趟的參數，不是全域常數。
 
-#: 這條路線**實際依序經過**的 routing 站（從 RViz 的 routes_visualization 讀出）。
-#: 只有這幾個要對障礙要求更嚴的淨空 —— 走廊上到處是車不會去的側室站點。
-ROUTE_WAYPOINTS: tuple[str, ...] = ("c28", "c4", "c26", "c27", "c36")
+
+@dataclass(frozen=True)
+class Route:
+    """一條來回路線：從 start 出發、到 goal 折返。"""
+
+    key: str
+    start: str
+    goal: str
+    #: 這條路線**實際依序經過**的 routing 站（從 RViz 的 routes_visualization 讀出）。
+    #: 只有這幾個要對障礙要求更嚴的淨空 —— 走廊上到處是車不會去的側室站點。
+    waypoints: tuple[str, ...]
+
+
+ROUTES: dict[str, Route] = {
+    "c27": Route("c27", "c28", "c27", ("c28", "c4", "c26", "c27")),
+    "c36": Route("c36", "c28", "c36", ("c28", "c4", "c26", "c27", "c36")),
+}
+
+#: 主路線（使用者：「主要以 c28→c27 為主」）。沒指定路線時用它。
+DEFAULT_ROUTE = "c27"
+
+#: 批次錄製的路線順序：主路線先跑，中途停手至少有完整的主路線。
+ROUTE_ORDER: tuple[str, ...] = ("c27", "c36")
+
+
+def route(key: str) -> Route:
+    """依 key 取路線。打錯要大聲報錯。"""
+    try:
+        return ROUTES[key]
+    except KeyError:
+        raise ValueError(f"未知路線 {key!r}，可用的是 {', '.join(ROUTES)}") from None
+
+
+# 舊名稱保留給還沒改成逐趟路線的呼叫端（= 主路線）
+ROUTE_START = ROUTES[DEFAULT_ROUTE].start
+ROUTE_GOAL = ROUTES[DEFAULT_ROUTE].goal
+ROUTE_WAYPOINTS: tuple[str, ...] = ROUTES[DEFAULT_ROUTE].waypoints
 
 
 #: 預設障礙物：沿 c28 → c27 這條展示路線佈置，讓車真的要閃避。

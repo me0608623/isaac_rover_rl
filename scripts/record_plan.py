@@ -38,14 +38,18 @@ DEFAULT_MODELS: tuple[str, ...] = ("sa4r2", "sa4r3", "sa5r2")
 CAMERAS_IN_PLAN: tuple[str, ...] = ("topdown", "chase", "oblique")
 
 
-def run_tag(model: str, scenario: str, run_index: int) -> str:
-    """一趟來回的唯一標籤。
+def run_tag(model: str, route: str, scenario: str, run_index: int) -> str:
+    """一趟來回的唯一標籤，例如 ``sa4r2_c27_static_run01``。
 
-    模型放最前面：同一個模型的十二趟會排在一起，`ls` 出來就是分組的。
+    模型放最前面：同一個模型的趟會排在一起，`ls` 出來就是分組的。
+    ⚠ 路線一定要在標籤裡：2026-09-23 加入第二條路線，兩條路線同名的
+      ``sa4r2_static_run01`` 會寫進同一個資料夾互相覆蓋。
     零補位是刻意的：不補位的話 ``ls`` 會把 run10 排在 run2 前面，
     事後對剪影片與 bag 時很容易拿錯。
     """
-    return f"{model}_{scenario}_run{run_index:02d}"
+    if not route:
+        raise ValueError("路線是空的 —— 兩條路線的趟會撞名")
+    return f"{model}_{route}_{scenario}_run{run_index:02d}"
 
 
 @dataclass(frozen=True)
@@ -56,10 +60,11 @@ class RunSpec:
     scenario: str
     run_index: int
     root: Path
+    route: str = "c27"
 
     @property
     def tag(self) -> str:
-        return run_tag(self.model, self.scenario, self.run_index)
+        return run_tag(self.model, self.route, self.scenario, self.run_index)
 
     @property
     def run_dir(self) -> Path:
@@ -89,19 +94,28 @@ class RunSpec:
         return self.video_dir / f"{self.tag}_{camera}.mp4"
 
 
-def build_plan(runs_per_scenario: int, root, models=DEFAULT_MODELS) -> tuple[RunSpec, ...]:
-    """依 模型 → 情境 → 趟次 三層產生整批計畫。
+def build_plan(runs_per_scenario: int, root, models=DEFAULT_MODELS,
+               routes=None) -> tuple[RunSpec, ...]:
+    """依 路線 → 模型 → 情境 → 趟次 四層產生整批計畫。
 
-    模型放最外層、情境次之、趟次最內：同一個模型的整組連著跑完再換下一個。
-    中途若要停手，至少會有**完整的一個模型**可用，而不是三個模型各缺一半。
+    路線放最外層：主路線（c27）整批先跑完。使用者說「主要以 c28→c27 為主」，
+    中途若要停手，至少主路線是完整的。模型次之：同一個模型的整組連著跑完，
+    不會三個模型各缺一半。
     """
+    import ros_graph_spec as S
+    routes = tuple(routes) if routes is not None else S.ROUTE_ORDER
+    if not routes:
+        raise ValueError("路線清單是空的")
+    for rk in routes:
+        S.route(rk)                       # 打錯路線名要在開跑前就炸
     if runs_per_scenario < 1:
         raise ValueError(f"每個情境至少要一趟，收到 {runs_per_scenario}")
     if not models:
         raise ValueError("模型清單是空的")
     root = Path(root)
     return tuple(
-        RunSpec(model=m, scenario=s, run_index=i, root=root)
+        RunSpec(model=m, scenario=s, run_index=i, root=root, route=rk)
+        for rk in routes
         for m in models
         for s in SCENARIO_NAMES
         for i in range(1, runs_per_scenario + 1)

@@ -16,7 +16,8 @@ cd "$(dirname "$0")/.." || exit 1
 WS=$PWD
 
 ROOT=${ROOT:-$WS/recordings}
-# 路線的唯一定義在 scripts/ros_graph_spec.py（ROUTE_START / ROUTE_GOAL）。
+# 路線的唯一定義在 scripts/ros_graph_spec.py（ROUTES）。
+# ⚠ 這裡讀的只是預設值，逐趟的起終點由計畫表帶進 run_one（兩條路線各一半）。
 # ⚠ 不要在這裡寫死站名：2026-09-23 由 c28↔c25 改成 c28↔c27，
 #   當時 legs / 提示訊息 / run.json 各寫一份，很容易有一處沒改到。
 read -r R_START R_GOAL <<<"$(PYTHONPATH="$WS/scripts" "$WS/.venv/bin/python" -c \
@@ -66,8 +67,10 @@ PLAN_FILE=$(mktemp)
 PYTHONPATH="$WS/scripts" .venv/bin/python - "$RUNS" "$ROOT" > "$PLAN_FILE" <<'PY'
 import sys
 from record_plan import build_plan
+import ros_graph_spec as S
 for r in build_plan(int(sys.argv[1]), sys.argv[2]):
-    print(f"{r.model}\t{r.scenario}\t{r.tag}\t{r.run_index}")
+    rt = S.route(r.route)
+    print(f"{r.model}\t{r.scenario}\t{r.tag}\t{r.run_index}\t{r.route}\t{rt.start}\t{rt.goal}")
 PY
 if [ ! -s "$PLAN_FILE" ]; then say "⚠ 產不出計畫表，中止"; exit 2; fi
 say "計畫共 $(wc -l < "$PLAN_FILE") 趟來回 → $ROOT"
@@ -80,7 +83,7 @@ pass_one () {
     cleanup_all
 
     say "  [1a] Isaac（不算圖，全速）"
-    nohup ./run_sim.sh --scenario "$SCEN" --run-index "$IDX" \
+    nohup ./run_sim.sh --scenario "$SCEN" --route "$ROUTE" --run-index "$IDX" \
           --crowd-mode "$CROWD_MODE" \
           --pose-log "$POSE" --crowd-log "$CROWD" \
           --collision-log "$DIR/collisions.csv" \
@@ -171,7 +174,9 @@ pass_two () {
     # 第二遍不跑 ROS，模型與它無關（只照第一遍的位姿回放）。
     local FRAMES="$DIR/frames" VIDEO="$DIR/video"
     say "  [2a] 回放算圖（path tracing）"
+    # ⚠ --scene：回放照抄第一遍拍下的場景快照，不自己重算（見 scene_snapshot）。
     ./replay.sh --pose-log "$DIR/pose.csv" --crowd-log "$DIR/crowd.csv" \
+        --scene "$DIR/scene.json" \
         --out "$FRAMES" --scenario "$SCEN" --run-index "$IDX" --fps "$FPS" \
         --width "$WIDTH" --height "$HEIGHT" > "$DIR/replay.log" 2>&1
     grep -E "^\[replay\] (第一幀|完成|情境)" "$DIR/replay.log" | tee -a "$BATCH_LOG"
@@ -194,17 +199,19 @@ pass_two () {
 
 run_one () {
     local MODEL="$1" SCEN="$2" TAG="$3" IDX="$4"
+    # 逐趟路線：pass_one / run.json 會看到這三個（bash 動態作用域）
+    local ROUTE="$5" R_START="$6" R_GOAL="$7"
     local DIR="$ROOT/模型$MODEL/$TAG"
     if [ -s "$DIR/video/${TAG}_chase.mp4" ] && [ -f "$DIR/run.json" ]; then
         say "  $TAG 已完成，跳過"; return 0
     fi
-    say "════ $TAG（模型 $MODEL／情境 $SCEN）════"
+    say "════ $TAG（模型 $MODEL／路線 $R_START↔$R_GOAL／情境 $SCEN）════"
     rm -rf "$DIR"; mkdir -p "$DIR/bag" "$DIR/nav" "$DIR/video"
     pass_one "$MODEL" "$SCEN" "$TAG" "$DIR" "$IDX" \
         || { say "  ⚠ $TAG 第一遍失敗，跳過"; cleanup_all; return 1; }
     pass_two "$SCEN" "$TAG" "$DIR" "$IDX"
 
-    PYTHONPATH="$WS/scripts" .venv/bin/python - "$DIR" "$SCEN" "$TAG" "$FPS" "$MODEL" "$SPEED_RATE" "$IDX" "$R_START" "$R_GOAL" <<'PY'
+    PYTHONPATH="$WS/scripts" .venv/bin/python - "$DIR" "$SCEN" "$TAG" "$FPS" "$MODEL" "$SPEED_RATE" "$IDX" "$R_START" "$R_GOAL" "$ROUTE" <<'PY'
 import json, sys
 from pathlib import Path
 d, scen, tag, fps, model, srate = (Path(sys.argv[1]), sys.argv[2], sys.argv[3],
@@ -213,8 +220,9 @@ nav = (d / "nav.log").read_text(errors="replace") if (d / "nav.log").exists() el
 meta = {
     "tag": tag, "model": model, "scenario": scen, "fps": fps,
     "speed_rate": srate,
-    # argv: 1=DIR 2=SCEN 3=TAG 4=FPS 5=MODEL 6=SPEED_RATE 7=IDX 8=起點 9=終點
+    # argv: 1=DIR 2=SCEN 3=TAG 4=FPS 5=MODEL 6=SPEED_RATE 7=IDX 8=起點 9=終點 10=路線
     "route": [sys.argv[8], sys.argv[9], sys.argv[8]],
+    "route_key": sys.argv[10],
     "model_loaded": next((l.strip() for l in
                           (d / "stack.log").read_text(errors="replace").splitlines()
                           if "RL profile" in l), None) if (d / "stack.log").exists() else None,
@@ -247,10 +255,10 @@ PY
 #   2026-09-22 踩過：ffmpeg 預設會把 stdin 整個吃掉，計畫表被讀光，
 #   12 趟只跑了第 1 趟就印「批次完成」，而且沒有任何錯誤訊息。
 #   ffmpeg 那邊也補了 -nostdin，兩道保險。
-while IFS=$'\t' read -r MODEL SCEN TAG IDX <&3; do
+while IFS=$'\t' read -r MODEL SCEN TAG IDX ROUTE RS RG <&3; do
     [ -z "$TAG" ] && continue
     if [ -n "${ONLY:-}" ] && [[ "$TAG" != *"$ONLY"* ]]; then continue; fi
-    run_one "$MODEL" "$SCEN" "$TAG" "$IDX"
+    run_one "$MODEL" "$SCEN" "$TAG" "$IDX" "$ROUTE" "$RS" "$RG"
 done 3< "$PLAN_FILE"
 
 cleanup_all

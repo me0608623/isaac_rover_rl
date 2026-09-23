@@ -299,9 +299,24 @@ def _obstacle_positions(n: int, rng: random.Random):
     return out
 
 
-def route_nodes(stations):
-    """從站點表挑出路線上的那幾站。缺的站直接略過（表換了不要炸）。"""
-    return {n: stations[n] for n in ROUTE_NODE_NAMES if n in stations}
+def route_nodes(stations, route_key=None):
+    """從站點表挑出**該路線**經過的那幾站。缺的站直接略過（表換了不要炸）。"""
+    import ros_graph_spec as _S
+    names = _S.route(route_key or _S.DEFAULT_ROUTE).waypoints
+    return {n: stations[n] for n in names if n in stations}
+
+
+def route_s_end(stations, route_key=None) -> float:
+    """路線終點在中心線上的弧長。障礙只擺到這裡為止。
+
+    ⚠ c27 路線的車不會開進 c27→c36 那段；那段雖然擺得下障礙（[18.1, 19.9]），
+    擺了等於白擺，還會吃掉分層抽樣的名額，讓 c28→c27 這段變稀。
+    """
+    import ros_graph_spec as _S
+    gx, gy, _ = stations[_S.route(route_key or _S.DEFAULT_ROUTE).goal]
+    L = spine_length()
+    return min((math.dist(spine_point(j / 20.0)[:2], (gx, gy)), j / 20.0)
+               for j in range(int(L * 20) + 1))[1]
 
 
 def _nearest_node_dist(p, stations) -> float:
@@ -424,138 +439,200 @@ def _gap_ok(prev, sc: float, side: float) -> bool:
     return sc - ps >= need
 
 
+#: 格內真的擺不下時，候選可以往兩側延伸多少（佔格寬比例）。
+#: ⚠ 2026-09-23 c27 路線只有約 8 m 可擺放，run4 要 5 個位置又要守間距規則，
+#:   嚴格「只在自己格內找」會卡死。延伸候選一律排在格內候選**之後**，
+#:   所以格內擺得下時結果完全不變。
+SLOT_SPILL = 0.5
+
+
 def _slot_s_candidates(intervals, t0: float, t1: float, rng: random.Random):
-    """一格（可擺放長度 [t0, t1]）的候選弧長：先試抖動抽到的，再往兩側掃。"""
+    """一格（可擺放長度 [t0, t1]）的候選弧長：先試抖動抽到的，再往兩側掃；
+    格內都試過了，才試往兩側延伸 SLOT_SPILL 格寬的位置。"""
     w = t1 - t0
+    total = sum(b - a for a, b in intervals)
     j = _jitter_fraction(w)
     t_first = (t0 + t1) / 2.0 + rng.uniform(-1.0, 1.0) * j * w
-    ts = [t_first]
+    inner, outer = [t_first], []
+    lo, hi = max(0.0, t0 - SLOT_SPILL * w), min(total, t1 + SLOT_SPILL * w)
     k = 1
     while True:
         added = False
         for d in (0.1 * k, -0.1 * k):
             t = t_first + d
             if t0 <= t <= t1:
-                ts.append(t)
+                inner.append(t)
+                added = True
+            elif lo <= t <= hi:
+                outer.append(t)
                 added = True
         if not added:
             break
         k += 1
-    return [_measure_to_s(intervals, t) for t in ts]
+    return [_measure_to_s(intervals, t) for t in inner + outer]
+
+
+def _pair_slot(intervals, slots) -> int:
+    """並排那一對要放哪一格：中心落在**最長一段可擺放區間**的那一格，
+    同樣長就挑最靠中間的。
+
+    ⚠ 2026-09-23 原本固定放正中間那格。c27 路線較短（可擺放約 8 m），
+    run4 的正中間那格剛好貼著 c26 的死區（c26 兩側各有側室站 c9、c5），
+    兩個人並排擺不下。並排那一對要兩個人都離站點夠遠，需要一段夠長的空地。
+    """
+    mid = (len(slots) - 1) / 2.0
+
+    def room(i):
+        t0, t1 = slots[i]
+        sc = _measure_to_s(intervals, (t0 + t1) / 2.0)
+        return max((b - a for a, b in intervals if a <= sc <= b), default=0.0)
+
+    return max(range(len(slots)), key=lambda i: (round(room(i), 2), -abs(i - mid)))
+
+
+#: 回溯搜尋最多試幾個節點；超過就大聲失敗（代表設定根本擺不下，不是運氣不好）。
+_PLACE_SEARCH_CAP = 200_000
 
 
 def _place_obstacles(n: int, rng: random.Random, on_route, stations,
-                     run_index: int) -> list[Obstacle]:
-    """分層抽樣擺 ``n`` 個靜態障礙：**每格一個**，並排那一對佔中間一格。
+                     run_index: int, route_key: str = "", s_end=None) -> list[Obstacle]:
+    """分層抽樣擺 ``n`` 個靜態障礙：**每格一個**，並排那一對佔一格。
 
     ⚠⚠ 2026-09-23 使用者指出分布不平均，實測原本的做法（全長等分 + 抖動，
     再把並排那一對固定在正中、撞到就推開 2.2 m，最後站點淨空再挪 ±4 m）
     嚴重結塊：run1 的 3 個障礙擠在 5.1~8.2 m，後面 8.8 m 全空。改成：
 
     * 先算出**可擺放區間**（扣掉站點死區），把可擺放的**總長**切成 n−1 格
-      （並排那一對共用一格），**每格恰好一個**
+      （並排那一對共用一格），**每格恰好一個**（擺不下才往兩側延伸半格）
     * 格內抖動自動收窄，保證相鄰間隔（同側 2.2 m、對側 1.54 m）
-    * 站點淨空不夠時**只在格內**找，不跨格 —— 跨格就又結塊了
     * 零星障礙用平衡的隨機決定是道具還是站立行人；抽到的道具擺不下就
       換小一點的道具，全部擺不下才退成站立行人
+
+    ⚠⚠ **回溯搜尋，不是貪心**：原本一格一格往前擺、擺了不回頭，前面的選擇
+    會卡死後面 —— c36 路線 run4 的第 3 格往後延伸佔走了尾段 s=18.69，
+    第 4 格就無處可擺。現在某格擺不下會回頭換前一格的位置。
+    所有隨機（抖動、道具順序、側向距離）都在搜尋**之前**抽好，搜尋本身
+    不消耗亂數，所以結果仍然完全可重現；各格選項的順序與原本貪心法相同，
+    原本擺得下的變體結果不變。
 
     找不到位置就**大聲失敗**，不要默默擺在站點旁邊。
     """
     import props as P
 
-    intervals = feasible_intervals(on_route, stations, 0.25)
+    s_hi = OBSTACLE_S_RANGE[1] if s_end is None else min(OBSTACLE_S_RANGE[1], s_end)
+    intervals = feasible_intervals(on_route, stations, 0.25,
+                                   s_range=(OBSTACLE_S_RANGE[0], s_hi))
+    # 名字帶路線：兩條路線的障礙都要預先寫進同一份 USD，不能撞名
+    tag = f"{route_key}_{run_index}" if route_key else f"{run_index}"
     n_slots = max(1, n - 1)
     slots, _total = measure_slots(intervals, n_slots)
-    pair_slot = n_slots // 2
+    pair_slot = _pair_slot(intervals, slots)
     n_singles = n - 2
     n_props = math.ceil(n_singles * PROP_SHARE) if n_singles > 0 else 0
     kinds = ["prop"] * n_props + ["person"] * (n_singles - n_props)
     rng.shuffle(kinds)
 
-    out: list[Obstacle] = []
-    prev = None
-    single_k = 0
-    idx = 0
+    # ── 1. 先把每一格要用的隨機全部抽好（順序與原本的貪心法相同）──────
+    half = SHOULDER_PAIR_SPACING_M / 2.0
     mags_default = (OBSTACLE_LATERAL_M, 1.5, 1.1, 0.85)
+    slot_opts = []                       # 每格：已通過站點淨空的選項，依偏好排序
+    single_k = 0
     for i, (t0, t1) in enumerate(slots):
         cands = _slot_s_candidates(intervals, t0, t1, rng)
+        opts = []
         if i == pair_slot:
-            side = 1.0 if rng.random() < 0.5 else -1.0
-            half = SHOULDER_PAIR_SPACING_M / 2.0
-            lats = (side * (SHOULDER_PAIR_LATERAL_M - half),
-                    side * (SHOULDER_PAIR_LATERAL_M + half))
-            placed = None
-            for sc in cands:
-                if not _gap_ok(prev, sc, side):
-                    continue
-                pts = [offset_from_spine(sc, la) for la in lats]
-                if all(node_clearance_ok(q, on_route, stations, 0.25) for q in pts):
-                    placed = (sc, pts)
-                    break
-            if placed is None:
-                raise RuntimeError(
-                    f"run{run_index} 第 {i} 格擺不下並排那一對")
-            sc, pts = placed
-            for q in pts:
-                out.append(Obstacle(f"pair_{run_index}_{idx}", round(q[0], 3),
-                                    round(q[1], 3), "person"))
-                idx += 1
-            prev = (sc, side)
-            continue
-
-        kind = kinds[single_k]
-        side = 1.0 if single_k % 2 == 0 else -1.0
-        single_k += 1
-        base_lat = OBSTACLE_LATERAL_M * rng.uniform(0.85, 1.0)
-        # 抽到的道具先試；擺不下就換其他道具（隨機順序）；全部擺不下才退成人。
-        # ⚠ 實測 run3 第一格擺不下外接半徑 1.01 m 的大盆栽，換檔案櫃就擺得下。
-        if kind == "prop":
-            first = rng.choice(P.PROPS)
-            rest = [x for x in P.PROPS if x is not first]
-            rng.shuffle(rest)
-            options = [first] + rest + [None]
+            first_side = 1.0 if rng.random() < 0.5 else -1.0
+            # 抽到的那側擺不下就換另一側（c27 run4 就是卡在這裡）
+            for side in (first_side, -first_side):
+                lats = (side * (SHOULDER_PAIR_LATERAL_M - half),
+                        side * (SHOULDER_PAIR_LATERAL_M + half))
+                for sc in cands:
+                    pts = [offset_from_spine(sc, la) for la in lats]
+                    if all(node_clearance_ok(q, on_route, stations, 0.25) for q in pts):
+                        opts.append(("pair", sc, side, pts, None))
         else:
-            options = [None]
-        placed = None
-        for spec in options:
-            extent = spec.extent_radius if spec else 0.25
-            for sc in cands:
-                if not _gap_ok(prev, sc, side):
-                    continue
-                for mag in (base_lat,) + mags_default[1:]:
-                    q = offset_from_spine(sc, side * mag)
-                    if node_clearance_ok(q, on_route, stations, extent):
-                        placed = (sc, q, spec)
-                        break
-                if placed:
-                    break
-            if placed:
-                break
-        if placed is None:
-            raise RuntimeError(
-                f"run{run_index} 第 {i} 格連站立行人都擺不下"
-                f"——同時要離路線站點 >= {NODE_CLEARANCE_M} m、離任何站點 "
-                f">= {ANY_NODE_CLEARANCE_M} m、離前一個障礙夠遠")
-        sc, q, spec = placed
+            kind = kinds[single_k]
+            side = 1.0 if single_k % 2 == 0 else -1.0
+            single_k += 1
+            base_lat = OBSTACLE_LATERAL_M * rng.uniform(0.85, 1.0)
+            if kind == "prop":
+                first = rng.choice(P.PROPS)
+                rest = [x for x in P.PROPS if x is not first]
+                rng.shuffle(rest)
+                specs = [first] + rest + [None]
+            else:
+                specs = [None]
+            for spec in specs:
+                extent = spec.extent_radius if spec else 0.25
+                for sc in cands:
+                    for mag in (base_lat,) + mags_default[1:]:
+                        q = offset_from_spine(sc, side * mag)
+                        if node_clearance_ok(q, on_route, stations, extent):
+                            opts.append(("single", sc, side, [q], spec))
+                            break       # 同一個弧長只取第一個可行的側向距離
+        slot_opts.append(opts)
+
+    # ── 2. 回溯搜尋：只剩「與前一個的間距」要在搜尋時檢查 ───────────────
+    tried = [0]
+
+    def place(i, prev):
+        if i == len(slot_opts):
+            return []
+        for opt in slot_opts[i]:
+            tried[0] += 1
+            if tried[0] > _PLACE_SEARCH_CAP:
+                raise RuntimeError(f"{route_key} run{run_index} 回溯搜尋超過 "
+                                   f"{_PLACE_SEARCH_CAP} 個節點仍擺不下")
+            _, sc, side, _, _ = opt
+            if not _gap_ok(prev, sc, side):
+                continue
+            rest = place(i + 1, (sc, side))
+            if rest is not None:
+                return [opt] + rest
+        return None
+
+    chosen = place(0, None)
+    if chosen is None:
+        empty = [i for i, o in enumerate(slot_opts) if not o]
+        raise RuntimeError(
+            f"{route_key} run{run_index} 擺不下 {n} 個障礙（{n_slots} 格）："
+            + (f"第 {empty} 格連一個通過站點淨空的位置都沒有" if empty else
+               f"每格都有可行位置，但任何組合都違反間距規則"
+               f"（同側 >= {MIN_OBSTACLE_GAP_M} m、對側 >= "
+               f"{MIN_OBSTACLE_GAP_M * OPPOSITE_SIDE_GAP_RATIO:.2f} m）"))
+
+    # ── 3. 組成 Obstacle ───────────────────────────────────────────────
+    out: list[Obstacle] = []
+    idx = 0
+    for kind, sc, side, pts, spec in chosen:
+        if kind == "pair":
+            for q in pts:
+                out.append(Obstacle(f"pair_{tag}_{idx}", round(q[0], 3),
+                                    round(q[1], 3), "person"))   # 並排的一定是兩個人
+                idx += 1
+            continue
+        q = pts[0]
         if spec:
             heading = spine_point(sc)[2]
             yaw = math.degrees(P.yaw_along(heading, spec))
-            out.append(Obstacle(f"prop_{run_index}_{idx}", round(q[0], 3),
+            out.append(Obstacle(f"prop_{tag}_{idx}", round(q[0], 3),
                                 round(q[1], 3), "prop",
                                 height=round(spec.height, 3),
                                 size_x=round(spec.size_x, 3),
                                 size_y=round(spec.size_y, 3),
                                 yaw_deg=round(yaw, 2), asset=spec.name))
         else:
-            out.append(Obstacle(f"ped_{run_index}_{idx}", round(q[0], 3),
+            out.append(Obstacle(f"ped_{tag}_{idx}", round(q[0], 3),
                                 round(q[1], 3), "person"))
         idx += 1
-        prev = (sc, side)
     return out
 
 
-def variant(run_index: int, stations=None) -> SceneVariant:
-    """產生第 ``run_index`` 趟（1 起算）的場景。同一個 index 永遠一樣。"""
+def variant(run_index: int, stations=None, route=None) -> SceneVariant:
+    """產生 ``route`` 路線第 ``run_index`` 趟（1 起算）的場景。同樣的輸入永遠一樣。
+
+    每條路線只在**自己會開到的那一段**分層抽樣擺障礙。
+    """
     if run_index < 1:
         raise ValueError(f"run_index 從 1 起算，收到 {run_index}")
     if stations is None:
@@ -563,10 +640,12 @@ def variant(run_index: int, stations=None) -> SceneVariant:
         stations = S.read_station_nodes(S.ROUTING_STATION_JSON)
     k = min(run_index, len(OBSTACLE_COUNTS)) - 1
     rng = random.Random(9000 + run_index)
-    on_route = route_nodes(stations)
+    import ros_graph_spec as _S
+    route_key = route or _S.DEFAULT_ROUTE
+    on_route = route_nodes(stations, route_key)
 
     obs = _place_obstacles(OBSTACLE_COUNTS[k], rng, on_route, stations,
-                           run_index)
+                           run_index, route_key, route_s_end(stations, route_key))
 
     n_walk = WALKER_COUNTS[k]
     walks = []
@@ -640,7 +719,9 @@ def all_variant_obstacles(n_runs: int = 4, stations=None):
     執行期只用 ``SetActive`` 開關，是已經驗證過可靠的做法。
     名字帶 run 編號，所以不同變體不會互撞。
     """
+    import ros_graph_spec as _S
     out = []
-    for i in range(1, n_runs + 1):
-        out.extend(variant(i, stations=stations).obstacles)
+    for rk in _S.ROUTE_ORDER:
+        for i in range(1, n_runs + 1):
+            out.extend(variant(i, stations=stations, route=rk).obstacles)
     return tuple(out)

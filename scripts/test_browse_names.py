@@ -100,3 +100,17 @@ def test_static_may_keep_pure_because_it_really_is():
     不對稱反映事實，比對稱但說謊好。"""
     assert SCENARIO_ZH["static"] == "純靜態"
     assert video_name("static", 2, "topdown", (8, 0), "orca").startswith("純靜態")
+
+
+def test_route_is_in_the_name_so_the_two_routes_never_collide():
+    """★★ 2026-09-23 加入第二條路線：同情境同一趟的兩支影片原本檔名一模一樣，
+    放進同一個資料夾就互相蓋掉。"""
+    a = video_name("mixed", 4, "topdown", (6, 8), "orca", route="c27")
+    b = video_name("mixed", 4, "topdown", (6, 8), "orca", route="c36")
+    assert a != b
+    assert a == "路線c27_混合_ORCA互動_第4趟_靜6動8_俯視.mp4"
+
+
+def test_old_runs_without_a_route_keep_their_names():
+    assert video_name("mixed", 4, "topdown", (6, 8), "orca") == \
+        "混合_ORCA互動_第4趟_靜6動8_俯視.mp4"

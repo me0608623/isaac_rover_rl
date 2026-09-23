@@ -71,23 +71,37 @@ def collision_cell(col) -> str:
     return f"**{n}**（" + "、".join(parts) + "）"
 
 
-def density_table(runs):
-    """情境 × 趟次的「靜N動M」表。數字取自各趟 log（run["counts"]）。
+def route_of(r) -> str:
+    """run.json → 路線 key。舊錄影沒有 route_key，從 route 的終點推。"""
+    if r.get("route_key"):
+        return r["route_key"]
+    rt = r.get("route") or []
+    return rt[1] if len(rt) >= 2 else ""
 
-    同一格有好幾個模型時，數字應該一樣（場景只依 run_index 與情境決定）；
+
+def density_table(runs):
+    """路線 × 情境 × 趟次的「靜N動M」表。數字取自各趟 log（run["counts"]）。
+
+    同一格有好幾個模型時，數字應該一樣（場景只依路線、run_index 與情境決定）；
     不一樣就**全部列出**，不要挑一個 —— 那代表執行期停用的角色不同。
+    兩條路線的障礙擺法不同（各自只在自己會開到的那段擺），所以要分開列。
     """
     idxs = sorted({r.get("run_index", 0) for r in runs if r.get("run_index")})
-    out = ["| 情境 | " + " | ".join(f"第{i}趟" for i in idxs) + " |",
-           "|---|" + "---|" * len(idxs)]
-    for sc in ("static", "dynamic", "mixed"):
-        cells = []
-        for i in idxs:
-            got = sorted({tuple(r["counts"]) for r in runs
-                          if r.get("scenario") == sc and r.get("run_index") == i
-                          and r.get("counts")})
-            cells.append(" / ".join(f"靜{a}動{b}" for a, b in got) if got else "—")
-        out.append(f"| {SCEN_ZH[sc]} | " + " | ".join(cells) + " |")
+    routes = sorted({route_of(r) for r in runs})
+    multi = len(routes) > 1 or routes != [""]
+    head = ("| 路線 | 情境 | " if multi else "| 情境 | ")
+    out = [head + " | ".join(f"第{i}趟" for i in idxs) + " |",
+           ("|---|---|" if multi else "|---|") + "---|" * len(idxs)]
+    for rk in routes:
+        for sc in ("static", "dynamic", "mixed"):
+            cells = []
+            for i in idxs:
+                got = sorted({tuple(r["counts"]) for r in runs
+                              if route_of(r) == rk and r.get("scenario") == sc
+                              and r.get("run_index") == i and r.get("counts")})
+                cells.append(" / ".join(f"靜{a}動{b}" for a, b in got) if got else "—")
+            lead = f"| {rk} | " if multi else "| "
+            out.append(f"{lead}{SCEN_ZH[sc]} | " + " | ".join(cells) + " |")
     return out
 
 
@@ -100,9 +114,13 @@ def render(runs, has_browse_tree: bool = True) -> str:
     A("+ rover_rl policy + vo_safety_node）的 3F 走廊來回導航。")
     A("")
     models = sorted({r["model"] for r in runs})
+    routes = sorted({route_of(r) for r in runs})
     scens = ["static", "dynamic", "mixed"]
-    A(f"**{len(models)} 模型 × {len(scens)} 情境 × 4 難度 × 3 視角 = "
+    A(f"**{len(models)} 模型 × {len(routes)} 路線 × {len(scens)} 情境 × 4 難度 × 3 視角 = "
       f"{len(runs) * 3} 段影片**，每趟附一份命名同步的 rosbag。")
+    A("")
+    A("路線：" + "、".join(f"`{rk}`（c28 ↔ {rk}）" for rk in routes if rk)
+      + "。主路線是 c27；c36 是 c27 再往西延伸 3.8 m。")
     A("")
     # 對照組的資料夾裡沒有索引樹，這段要是照印就會叫人去一個不存在的地方。
     if has_browse_tree:
@@ -298,21 +316,27 @@ def render(runs, has_browse_tree: bool = True) -> str:
     A("重算：`PYTHONPATH= .venv/bin/python scripts/nearest_source.py recordings`")
     A("（完整報表在 `reports/nearest_source.txt`）")
     A("")
-    A("### 依模型 × 情境彙總")
+    A("### 依模型 × 路線 × 情境彙總")
     A("")
-    A("| 模型 | 情境 | 抵達 | 最近障礙(最差) | 碰撞幀 | 平均每段耗時 |")
-    A("|---|---|---|---|---|---|")
+    A("| 模型 | 路線 | 情境 | 抵達 | 最近障礙(最差) | 碰撞幀 | 真的碰到 | 平均每段耗時 |")
+    A("|---|---|---|---|---|---|---|---|")
     for m in models:
-        for sc in scens:
-            legs = [l for r in runs if r["model"] == m and r["scenario"] == sc
-                    for l in r["legs"]]
-            c = cell_summary(legs)
-            if not c["legs"]:
-                A(f"| `{m}` | {sc} | — | — | — | — |")
-                continue
-            A(f"| `{m}` | {sc} | {c['arrived']}/{c['legs']} 段 | "
-              f"{c['min_range_m']:.2f} m | {c['collision_frames']} | "
-              f"{c['seconds']:.1f} s |")
+        for rk in routes:
+            for sc in scens:
+                sel = [r for r in runs if r["model"] == m and route_of(r) == rk
+                       and r["scenario"] == sc]
+                legs = [l for r in sel for l in r["legs"]]
+                c = cell_summary(legs)
+                touched = sum((r.get("collisions") or {}).get("episodes", 0) for r in sel)
+                broken = any((r.get("collisions") or {}).get("detector", {}).get("overlap_ok") is False
+                             for r in sel)
+                touch_cell = "⚠ 偵測器失效" if broken else str(touched)
+                if not c["legs"]:
+                    A(f"| `{m}` | {rk} | {sc} | — | — | — | — | — |")
+                    continue
+                A(f"| `{m}` | {rk} | {sc} | {c['arrived']}/{c['legs']} 段 | "
+                  f"{c['min_range_m']:.2f} m | {c['collision_frames']} | {touch_cell} | "
+                  f"{c['seconds']:.1f} s |")
     A("")
     A("### 逐趟明細")
     A("")

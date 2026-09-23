@@ -39,6 +39,10 @@ def main() -> int:
     ap.add_argument("--run-index", type=int, default=0,
                     help="場景變體編號。⚠ 必須與第一遍**完全相同**，"
                          "否則影片裡的障礙與行人跟 rosbag 裡光達打到的對不起來。")
+    ap.add_argument("--scene", default="",
+                    help="第一遍寫的 scene.json。給了就**照抄**它擺場景（啟用哪些障礙、"
+                         "哪些角色、誰走誰站、站的朝向），不自己重算規則。"
+                         "有 --run-index 時必給。")
     ap.add_argument("--fps", type=float, default=30.0, help="影片幀率（模擬時間）")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
@@ -57,10 +61,29 @@ def main() -> int:
     from scenarios import scenario_config
 
     scen = scenario_config(args.scenario)
-    sv = None
-    if args.run_index >= 1:
-        from scene_variants import variant as _variant
-        sv = _variant(args.run_index)
+    snap = None
+    if args.scene:
+        # ⚠⚠ 2026-09-23：兩遍各寫一份「誰該停用」的規則已經走樣 —— 第一遍改成
+        #   dynamic 停用站立人物、static 停用站在導航點旁的人，這裡沒跟著改，
+        #   dynamic/static 的影片裡會出現導航時根本不在場的人。
+        #   改成照抄第一遍拍下的快照，兩遍從此不可能不一致。
+        from scene_snapshot import read_snapshot
+        snap = read_snapshot(Path(args.scene).parent)
+        if snap is None:
+            print(f"[replay] ⚠ 找不到 {args.scene}", file=sys.stderr)
+            return 2
+        if snap.get("version", 1) < 2:
+            print(f"[replay] ⚠ {args.scene} 是 v1 快照，缺走動行人的路線，不能回放",
+                  file=sys.stderr)
+            return 2
+        if snap["scenario"] != scen.name:
+            print(f"[replay] ⚠ 快照情境 {snap['scenario']} 與 --scenario {scen.name} 不同",
+                  file=sys.stderr)
+            return 2
+    elif args.run_index >= 1:
+        print("[replay] ⚠ 有 --run-index 卻沒給 --scene —— 不要自己重算場景，"
+              "那會跟第一遍不一致（見 scene_snapshot 說明）", file=sys.stderr)
+        return 2
     samples = parse_rows(Path(args.pose_log).read_text().splitlines())
     if len(samples) < 2:
         print(f"[replay] 位姿軌跡只有 {len(samples)} 筆，無法回放", file=sys.stderr)
@@ -106,75 +129,56 @@ def main() -> int:
     st = omni.usd.get_context().get_stage()
     from build_ros_graph import measure_corridor_floor_top
     from camera_recorder import CameraRecorder
-    from character_colliders import (nearest_routing_node, thin_by_spacing,
-                                     too_close_to_robot, too_close_to_routing_node)
     from character_walk import CharacterWalkDriver
     import ros_graph_spec as S
 
     floor = measure_corridor_floor_top(st)
 
-    want = ({o.name for o in sv.obstacles} if sv is not None else None)
+    # ── 障礙：照快照開關 ───────────────────────────────────────────────
+    want = ({o["name"] for o in snap["obstacles"]} if snap is not None else None)
     obs_root = st.GetPrimAtPath("/World/SimObstacles")
     if obs_root and obs_root.IsValid():
         n_on = 0
         for o in obs_root.GetChildren():
-            on = scen.obstacles_enabled and (want is None or o.GetName() in want)
+            on = (o.GetName() in want) if want is not None else scen.obstacles_enabled
             o.SetActive(on)
             n_on += 1 if on else 0
         print(f"[replay] 障礙 {n_on} 個啟用"
-              + (f"（變體 run{args.run_index}）" if sv else ""), flush=True)
+              + (f"（照第一遍的快照，{snap.get('route') or '?'} 路線 run{snap['run_index']}）"
+                 if snap is not None else "（無快照、預設場景）"), flush=True)
 
-    # 角色：跟第一趟用同一條規則決定誰被停用，畫面才對得上。
-    spawn_xy = (samples[0].pos[0], samples[0].pos[1])
-    stations = S.read_station_nodes(S.ROUTING_STATION_JSON)
+    # ── 角色：照快照決定誰在場、誰走、誰擺在哪 ─────────────────────────
+    #   不再重算 too_close_to_robot / routing 點 / 疏密 —— 那些規則只在第一遍
+    #   跑一次，結果記在快照裡。
     chars = []
-    stand_xy = {}
-    variant_walks = sv.walks if sv is not None else S.DEFAULT_CHARACTER_WALKS
-    walk_names = {w.name for w in variant_walks}
-    allowed = ((walk_names | {p.name for p in sv.standing})
-               if sv is not None else None)
     croot = st.GetPrimAtPath("/World/Characters")
-    cache = UsdGeom.XformCache()
+    if snap is not None:
+        from scene_snapshot import placed_standing, walks_of
+        active = {c["name"] for c in snap["characters"]}
+        walks = walks_of(snap)
+        placements = placed_standing(snap)
+    else:
+        active = None
+        walks = list(S.DEFAULT_CHARACTER_WALKS) if scen.walks_enabled else []
+        placements = []
     if croot and croot.IsValid():
         for c in croot.GetChildren():
             if c.GetName() == "Biped_Setup":
                 continue
-            if allowed is not None and c.GetName() not in allowed:
-                c.SetActive(False)
-                continue
-            t = cache.GetLocalToWorldTransform(c).ExtractTranslation()
-            if too_close_to_robot((t[0], t[1]), spawn_xy):
-                c.SetActive(False)
-                continue
-            # ⚠ 這條規則必須與第一遍（run_isaac_sim）逐字相同，
-            #   否則回放出來的畫面會多／少一個人，跟 rosbag 對不起來。
-            if c.GetName() not in {w.name for w in S.DEFAULT_CHARACTER_WALKS}:
-                mx, my, _ = S.world_to_map(t[0], t[1], 0.0)
-                if too_close_to_routing_node((mx, my), stations):
-                    c.SetActive(False)
-                    continue
-            chars.append(str(c.GetPath()))
-            stand_xy[c.GetName()] = (t[0], t[1])
-    # ⚠ 與第一遍逐字相同的疏密規則 —— 兩遍留下的人必須一樣多、一樣是誰。
-    _kept, crowded = thin_by_spacing(
-        [(n, xy) for n, xy in stand_xy.items() if n not in walk_names])
-    if crowded:
-        drop = set(crowded)
-        for cp in list(chars):
-            if cp.rsplit("/", 1)[-1] in drop:
-                st.GetPrimAtPath(cp).SetActive(False)
-        chars = [cp for cp in chars if cp.rsplit("/", 1)[-1] not in drop]
-        print(f"[replay] 停用(站太近、降低密度) {crowded}", flush=True)
+            on = active is None or c.GetName() in active
+            c.SetActive(on)
+            if on:
+                chars.append(str(c.GetPath()))
+    if active is not None:
+        missing = active - {cp.rsplit("/", 1)[-1] for cp in chars}
+        if missing:
+            print(f"[replay] ⚠ 快照裡的角色在 stage 找不到：{sorted(missing)}", flush=True)
 
-    walk_driver = CharacterWalkDriver(
-        st, chars,
-        walks=variant_walks if scen.walks_enabled else (),
-        floor_top=floor)
+    walk_driver = CharacterWalkDriver(st, chars, walks=walks, floor_top=floor)
     n_place = 0
-    if sv is not None:
-        for sp in sv.standing:
-            if walk_driver.place_standing(sp.name, (sp.map_x, sp.map_y), sp.yaw):
-                n_place += 1
+    for name, mx, my, yaw in placements:
+        if walk_driver.place_standing(name, (mx, my), yaw):
+            n_place += 1
     n_ground = walk_driver.ground_standing()
     print(f"[replay] 站立人物擺位 {n_place} 個　腳底對地 {n_ground} 個", flush=True)
     print(f"[replay] 情境 {scen.name}：角色 {len(walk_driver)} 人 / "

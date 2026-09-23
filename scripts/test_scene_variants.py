@@ -11,6 +11,12 @@ from scene_variants import (CORRIDOR_SPINE, MIN_OBSTACLE_GAP_M, OBSTACLE_COUNTS,
                             spine_point, variant)
 
 
+
+#: 兩條路線 × 四趟。場景的不變量兩條路線都要成立 ——
+#: 2026-09-23 加入第二條路線時，這些測試原本只測預設路線，c36 的障礙沒人把關。
+import ros_graph_spec as _S_ROUTES
+ALL_VARIANTS = [(rk, i) for rk in _S_ROUTES.ROUTE_ORDER for i in (1, 2, 3, 4)]
+
 def test_counts_increase_with_run_index():
     """★ 使用者指定數量要依序更多。"""
     obs = [len(variant(i).obstacles) for i in (1, 2, 3, 4)]
@@ -57,25 +63,25 @@ def _sides(obstacles):
 def test_there_is_exactly_one_shoulder_to_shoulder_pair():
     """★ 使用者指定：走廊中段要有**兩個人肩並肩站在一側**，逼車走另一邊。
     這比一長串左右交錯更接近真實走廊。"""
-    for run in (1, 2, 3, 4):
-        pair = [o for o in variant(run).obstacles if o.name.startswith("pair_")]
-        assert len(pair) == 2, f"run{run} 有 {len(pair)} 個並排障礙"
+    for rk, run in ALL_VARIANTS:
+        pair = [o for o in variant(run, route=rk).obstacles if o.name.startswith("pair_")]
+        assert len(pair) == 2, f"{rk} run{run} 有 {len(pair)} 個並排障礙"
         d = math.hypot(pair[0].map_x - pair[1].map_x, pair[0].map_y - pair[1].map_y)
-        assert 0.4 <= d <= 0.9, f"run{run} 兩人相距 {d:.2f} m，不像肩並肩"
-        assert _sides(pair)[0] == _sides(pair)[1], f"run{run} 那一對不在同一側"
+        assert 0.4 <= d <= 0.9, f"{rk} run{run} 兩人相距 {d:.2f} m，不像肩並肩"
+        assert _sides(pair)[0] == _sides(pair)[1], f"{rk} run{run} 那一對不在同一側"
         assert all(o.kind == "person" for o in pair), "並排的必須是人，不是推車"
 
 
 def test_single_obstacles_alternate_sides():
     """★ 零星障礙要左右交錯（並排那一對不算，它刻意同側）。"""
-    for run in (1, 2, 3, 4):
-        v = variant(run)
+    for rk, run in ALL_VARIANTS:
+        v = variant(run, route=rk)
         singles = [o for o in v.obstacles if not o.name.startswith("pair_")]
         if len(singles) < 2:
             continue
         sides = _sides(singles)
         flips = sum(1 for a, b in zip(sides, sides[1:]) if a != b)
-        assert flips == len(sides) - 1, f"run{run} 零星障礙側邊 {sides} 沒交錯"
+        assert flips == len(sides) - 1, f"{rk} run{run} 零星障礙側邊 {sides} 沒交錯"
 
 
 def test_obstacles_are_spread_over_the_whole_corridor():
@@ -87,8 +93,8 @@ def test_obstacles_are_spread_over_the_whole_corridor():
 
 
 def _unused_alternation_check():
-    for run in (1, 2, 3, 4):
-        v = variant(run)
+    for rk, run in ALL_VARIANTS:
+        v = variant(run, route=rk)
         sides = []
         for o in v.obstacles:
             # 用最近的中心線點判斷在左邊還是右邊
@@ -103,20 +109,20 @@ def _unused_alternation_check():
             cross = (-math.sin(hd)) * (o.map_x - px) + math.cos(hd) * (o.map_y - py)
             sides.append(1 if cross > 0 else -1)
         flips = sum(1 for a, b in zip(sides, sides[1:]) if a != b)
-        assert flips == len(sides) - 1, f"run{run} 側邊序列 {sides} 沒有完全交錯"
+        assert flips == len(sides) - 1, f"{rk} run{run} 側邊序列 {sides} 沒有完全交錯"
 
 
 def test_obstacles_keep_a_minimum_gap_along_the_corridor():
     """★ 兩個障礙沿走廊太近會把路封死。並排那一對除外（刻意靠在一起）。"""
-    for run in (1, 2, 3, 4):
-        obs = variant(run).obstacles
+    for rk, run in ALL_VARIANTS:
+        obs = variant(run, route=rk).obstacles
         for i in range(len(obs) - 1):
             if obs[i].name.startswith("pair_") and obs[i + 1].name.startswith("pair_"):
                 continue
             d = math.hypot(obs[i + 1].map_x - obs[i].map_x,
                            obs[i + 1].map_y - obs[i].map_y)
             assert d >= MIN_OBSTACLE_GAP_M * 0.6, \
-                f"run{run} 第 {i} 與 {i+1} 只差 {d:.2f} m"
+                f"{rk} run{run} 第 {i} 與 {i+1} 只差 {d:.2f} m"
 
 
 def test_obstacles_stay_clear_of_the_route_nodes():
@@ -136,62 +142,63 @@ def test_obstacles_stay_clear_of_the_route_nodes():
     import ros_graph_spec as S
     from scene_variants import NODE_CLEARANCE_M, route_nodes
 
-    on_route = route_nodes(S.read_station_nodes(S.ROUTING_STATION_JSON))
-    assert set(on_route) == set(S.ROUTE_WAYPOINTS)
-    for run in (1, 2, 3, 4):
-        for o in variant(run).obstacles:
+    st = S.read_station_nodes(S.ROUTING_STATION_JSON)
+    for rk, run in ALL_VARIANTS:
+        on_route = route_nodes(st, rk)
+        assert set(on_route) == set(S.route(rk).waypoints)
+        for o in variant(run, route=rk).obstacles:
             d = min(math.hypot(v[0] - o.map_x, v[1] - o.map_y)
                     for v in on_route.values())
             assert d >= NODE_CLEARANCE_M, \
-                f"run{run} 的 {o.name} 離路線站點只有 {d:.2f} m"
+                f"{rk} run{run} 的 {o.name} 離路線站點只有 {d:.2f} m"
 
 
 def test_walker_speeds_respect_the_cap():
     from ros_graph_spec import MAX_CHARACTER_SPEED_M_S
 
-    for run in (1, 2, 3, 4):
-        for w in variant(run).walks:
+    for rk, run in ALL_VARIANTS:
+        for w in variant(run, route=rk).walks:
             assert w.speed <= MAX_CHARACTER_SPEED_M_S
 
 
 def test_walkers_are_distinct_characters():
     """★ 同一個角色被指派兩條路線 → 後者覆蓋前者，人數會少掉而且不報錯。"""
-    for run in (1, 2, 3, 4):
-        names = [w.name for w in variant(run).walks]
+    for rk, run in ALL_VARIANTS:
+        names = [w.name for w in variant(run, route=rk).walks]
         assert len(set(names)) == len(names)
 
 
 def test_standing_and_walking_never_overlap():
     """★ 同一個角色不能既站著又走路 —— 兩個驅動器會搶同一個 transform。"""
-    for run in (1, 2, 3, 4):
-        v = variant(run)
+    for rk, run in ALL_VARIANTS:
+        v = variant(run, route=rk)
         assert not ({p.name for p in v.standing} & {w.name for w in v.walks})
 
 
 def test_one_standing_person_per_person_obstacle():
     """★ 使用者指定站立障礙要用虛擬人物，不要圓柱。
     每個「人形障礙」都要有一個角色站在同一個位置上。"""
-    for run in (1, 2, 3, 4):
-        v = variant(run)
+    for rk, run in ALL_VARIANTS:
+        v = variant(run, route=rk)
         n_person = sum(1 for o in v.obstacles if o.kind == "person")
         assert len(v.standing) == n_person, \
-            f"run{run} 有 {n_person} 個人形障礙但只擺了 {len(v.standing)} 個角色"
+            f"{rk} run{run} 有 {n_person} 個人形障礙但只擺了 {len(v.standing)} 個角色"
         for p in v.standing:
             assert any(abs(o.map_x - p.map_x) < 1e-6 and abs(o.map_y - p.map_y) < 1e-6
                        for o in v.obstacles), f"{p.name} 沒對到任何障礙位置"
 
 
 def test_standing_names_are_unique():
-    for run in (1, 2, 3, 4):
-        names = [p.name for p in variant(run).standing]
+    for rk, run in ALL_VARIANTS:
+        names = [p.name for p in variant(run, route=rk).standing]
         assert len(set(names)) == len(names)
 
 
 def test_walk_routes_are_long_enough():
-    for run in (1, 2, 3, 4):
-        for w in variant(run).walks:
+    for rk, run in ALL_VARIANTS:
+        for w in variant(run, route=rk).walks:
             L = math.dist(w.waypoints[0], w.waypoints[-1])
-            assert L >= 2.5, f"run{run} 的 {w.name} 單程只有 {L:.1f} m"
+            assert L >= 2.5, f"{rk} run{run} 的 {w.name} 單程只有 {L:.1f} m"
 
 
 def test_spine_point_clamps_at_both_ends():
@@ -228,14 +235,14 @@ def test_walker_starts_do_not_overlap():
 
     from scene_variants import MIN_WALKER_START_GAP_M
 
-    for run in (1, 2, 3, 4):
-        v = variant(run)
+    for rk, run in ALL_VARIANTS:
+        v = variant(run, route=rk)
         starts = [w.waypoints[0] for w in v.walks]
         for i in range(len(starts)):
             for j in range(i + 1, len(starts)):
                 d = math.dist(starts[i], starts[j])
                 assert d >= MIN_WALKER_START_GAP_M, (
-                    f"run{run} 的 {v.walks[i].name} 與 {v.walks[j].name} "
+                    f"{rk} run{run} 的 {v.walks[i].name} 與 {v.walks[j].name} "
                     f"起點只差 {d:.3f} m")
 
 
@@ -246,14 +253,14 @@ def test_walker_starts_are_clear_of_obstacles():
 
     from scene_variants import MIN_WALKER_START_GAP_M
 
-    for run in (1, 2, 3, 4):
-        v = variant(run)
+    for rk, run in ALL_VARIANTS:
+        v = variant(run, route=rk)
         for w in v.walks:
             for o in v.obstacles:
                 d = math.hypot(w.waypoints[0][0] - o.map_x,
                                w.waypoints[0][1] - o.map_y)
                 assert d >= MIN_WALKER_START_GAP_M, (
-                    f"run{run} 的 {w.name} 起點離 {o.name} 只有 {d:.3f} m")
+                    f"{rk} run{run} 的 {w.name} 起點離 {o.name} 只有 {d:.3f} m")
 
 
 def test_start_gap_check_uses_the_stored_rounded_coordinates():
@@ -284,13 +291,13 @@ def test_obstacles_keep_clear_of_the_goal_and_the_turnaround():
     from scene_variants import NODE_CLEARANCE_M
 
     st = S.read_station_nodes(S.ROUTING_STATION_JSON)
-    for run in (1, 2, 3, 4):
-        for o in variant(run).obstacles:
+    for rk, run in ALL_VARIANTS:
+        for o in variant(run, route=rk).obstacles:
             for node in ("c27", "c36"):
                 d = math.hypot(st[node][0] - o.map_x, st[node][1] - o.map_y)
                 need = NODE_CLEARANCE_M + max(0.0, o.extent_radius - 0.3)
                 assert d >= need - 1e-6, (
-                    f"run{run} 的 {o.name} 離 {node} 只有 {d:.2f} m（要 {need:.2f}）")
+                    f"{rk} run{run} 的 {o.name} 離 {node} 只有 {d:.2f} m（要 {need:.2f}）")
 
 
 def _s_along(o):
@@ -304,13 +311,37 @@ def _s_along(o):
     return best[1]
 
 
-def test_route_goes_to_c36():
-    """2026-09-23 使用者要求終點延伸到 c36（主要仍以 c28→c27 為主）。"""
+def test_both_routes_are_defined_and_c27_is_the_main_one():
+    """★ 2026-09-23 使用者更正：要的是**兩條路線都錄**（c28↔c27 為主、c28↔c36 為輔），
+    不是把終點延長。我先前只做了 c28↔c36，跑了 3 趟才發現。"""
     import ros_graph_spec as S
-    assert (S.ROUTE_START, S.ROUTE_GOAL) == ("c28", "c36")
-    assert S.ROUTE_WAYPOINTS[-1] == "c36" and "c27" in S.ROUTE_WAYPOINTS
+    assert set(S.ROUTES) == {"c27", "c36"}
+    assert (S.route("c27").start, S.route("c27").goal) == ("c28", "c27")
+    assert (S.route("c36").start, S.route("c36").goal) == ("c28", "c36")
+    assert S.route("c36").waypoints[-2:] == ("c27", "c36")
+    assert S.DEFAULT_ROUTE == "c27" and S.ROUTE_ORDER[0] == "c27"
     assert CORRIDOR_SPINE[-1] == pytest.approx((-20.75, 3.17), abs=0.05)
 
+
+def test_c27_route_puts_nothing_beyond_its_goal():
+    """★ c27 路線的車不會開進 c27→c36；那段擺了障礙等於白擺，
+    還會吃掉分層抽樣的名額，讓 c28→c27 變稀。"""
+    import ros_graph_spec as S
+    from scene_variants import route_s_end
+
+    end = route_s_end(S.read_station_nodes(S.ROUTING_STATION_JSON), "c27")
+    for run in (1, 2, 3, 4):
+        for o in variant(run, route="c27").obstacles:
+            assert _s_along(o) < end, f"c27 run{run} 的 {o.name} 在 s={_s_along(o):.2f}"
+
+
+def test_obstacle_names_are_unique_across_routes():
+    """★ 兩條路線的障礙都預先寫進同一份 USD，執行期靠名字開關 —— 撞名的話
+    開 c27 的障礙會連帶開到 c36 的。"""
+    from scene_variants import all_variant_obstacles
+    names = [o.name for o in all_variant_obstacles()]
+    assert len(names) == len(set(names))
+    assert any("_c27_" in n for n in names) and any("_c36_" in n for n in names)
 
 def test_each_stratum_holds_exactly_one_placement():
     """★★ 分層抽樣：可擺放長度切成 n−1 格，每格恰好一個（並排那一對算一個）。
@@ -322,45 +353,68 @@ def test_each_stratum_holds_exactly_one_placement():
     from scene_variants import (feasible_intervals, measure_slots,
                                 route_nodes)
 
+    from scene_variants import OBSTACLE_S_RANGE, SLOT_SPILL, route_s_end
+
     st = S.read_station_nodes(S.ROUTING_STATION_JSON)
-    iv = feasible_intervals(route_nodes(st), st, 0.25)
 
-    def t_of(sv):                     # 弧長 → 可擺放長度上的位置
-        t = 0.0
-        for a, b in iv:
-            if sv <= b:
-                return t + max(0.0, sv - a)
-            t += b - a
-        return t
+    for rk, run in ALL_VARIANTS:
+        iv = feasible_intervals(route_nodes(st, rk), st, 0.25,
+                                s_range=(OBSTACLE_S_RANGE[0], route_s_end(st, rk)))
 
-    for run in (1, 2, 3, 4):
-        v = variant(run)
+        def t_of(sv):                     # 弧長 → 可擺放長度上的位置
+            t = 0.0
+            for a, b in iv:
+                if sv <= b:
+                    return t + max(0.0, sv - a)
+                t += b - a
+            return t
+
+        v = variant(run, route=rk)
         n_slots = len(v.obstacles) - 1
         slots, _ = measure_slots(iv, n_slots)
-        placements = sorted({round(_s_along(o), 2) for o in v.obstacles})
-        assert len(placements) == n_slots, f"run{run} 位置數 {placements}"
+        # 並排那一對算一個位置（兩人在彎道上投影到中心線的弧長會差幾公分）
+        pair = [_s_along(o) for o in v.obstacles if o.name.startswith("pair_")]
+        placements = sorted([_s_along(o) for o in v.obstacles
+                             if not o.name.startswith("pair_")]
+                            + ([sum(pair) / len(pair)] if pair else []))
+        assert len(placements) == n_slots, f"{rk} run{run} 位置數 {placements}"
         for k, sv in enumerate(placements):
             t = t_of(sv)
             t0, t1 = slots[k]
-            assert t0 - 0.15 <= t <= t1 + 0.15, (
-                f"run{run} 第 {k} 個（s={sv}，可擺長度 {t:.2f}）不在第 {k} 格 "
-                f"[{t0:.2f}, {t1:.2f}]")
+            # 格內擺不下時允許往兩側延伸 SLOT_SPILL 格寬（c27 路線較短才需要）
+            spill = SLOT_SPILL * (t1 - t0) + 0.15
+            assert t0 - spill <= t <= t1 + spill, (
+                f"{rk} run{run} 第 {k} 個（s={sv}，可擺長度 {t:.2f}）不在第 {k} 格 "
+                f"[{t0:.2f}, {t1:.2f}]（含延伸 {spill:.2f}）")
 
 
 def test_obstacles_reach_both_ends_of_the_route():
-    """★ 平均的意思是頭尾都要有：第一個障礙要落在第一格、最後一個落在最後一格。
-    舊版 run1 最後一個在 s=8.2，後面 8.8 m 空白。"""
-    for run in (1, 2, 3, 4):
-        ss = sorted(_s_along(o) for o in variant(run).obstacles)
-        assert ss[0] <= 7.0, f"run{run} 第一個障礙在 s={ss[0]:.1f}"
-        assert ss[-1] >= 15.0, f"run{run} 最後一個障礙在 s={ss[-1]:.1f}，後段空白"
+    """★ 平均的意思是頭尾都要有：最後一個障礙要落在路線可擺放範圍的後段。
+    舊版 run1 最後一個在 s=8.2、後面 8.8 m 空白。
 
+    門檻相對於**各自路線**的可擺放範圍（c27 路線較短，終點 s≈17.05）。
+    """
+    import ros_graph_spec as S
+    from scene_variants import (OBSTACLE_S_RANGE, feasible_intervals,
+                                route_nodes, route_s_end)
+
+    st = S.read_station_nodes(S.ROUTING_STATION_JSON)
+    for rk, run in ALL_VARIANTS:
+        iv = feasible_intervals(route_nodes(st, rk), st, 0.25,
+                                s_range=(OBSTACLE_S_RANGE[0], route_s_end(st, rk)))
+        lo = next(a for a, b in iv if b > a)
+        hi = iv[-1][1]
+        ss = sorted(_s_along(o) for o in variant(run, route=rk).obstacles)
+        span = hi - lo
+        assert ss[0] <= lo + 0.4 * span, f"{rk} run{run} 第一個障礙在 s={ss[0]:.1f}"
+        assert ss[-1] >= lo + 0.55 * span, (
+            f"{rk} run{run} 最後一個障礙在 s={ss[-1]:.1f}，後段空白（可擺到 {hi:.1f}）")
 
 def test_mostly_between_c28_and_c27():
     """★ 使用者要求「主要以 c28→c27 為主」。c27 在 s≈17.0。"""
     total = tail = 0
-    for run in (1, 2, 3, 4):
-        for o in variant(run).obstacles:
+    for rk, run in ALL_VARIANTS:
+        for o in variant(run, route=rk).obstacles:
             total += 1
             tail += _s_along(o) > 17.03
     assert tail / total <= 0.25, f"{tail}/{total} 個在 c27→c36"
@@ -371,8 +425,8 @@ def test_side_aware_gap_between_neighbours():
     對側相鄰 >= 1.54 m（左右交錯本來就要車蛇行）。並排那一對除外。"""
     from scene_variants import MIN_OBSTACLE_GAP_M, OPPOSITE_SIDE_GAP_RATIO
 
-    for run in (1, 2, 3, 4):
-        obs = sorted(variant(run).obstacles, key=_s_along)
+    for rk, run in ALL_VARIANTS:
+        obs = sorted(variant(run, route=rk).obstacles, key=_s_along)
         side = _sides(obs)
         for i in range(len(obs) - 1):
             if obs[i].name.startswith("pair_") and obs[i + 1].name.startswith("pair_"):
@@ -381,17 +435,17 @@ def test_side_aware_gap_between_neighbours():
             need = MIN_OBSTACLE_GAP_M * (1.0 if side[i] == side[i + 1]
                                          else OPPOSITE_SIDE_GAP_RATIO)
             assert gap >= need - 0.06, (
-                f"run{run} {obs[i].name}→{obs[i+1].name} 只差 {gap:.2f} m（要 {need:.2f}）")
+                f"{rk} run{run} {obs[i].name}→{obs[i+1].name} 只差 {gap:.2f} m（要 {need:.2f}）")
 
 
 def test_singles_are_a_balanced_random_mix_of_props_and_people():
     """★ 使用者要求靜態障礙隨機抽成道具或站立行人。用平衡的隨機：
     純隨機在 run1（只有 1 個零星障礙）有一半機率完全沒有道具。"""
-    for run in (1, 2, 3, 4):
-        singles = [o for o in variant(run).obstacles if not o.name.startswith("pair_")]
+    for rk, run in ALL_VARIANTS:
+        singles = [o for o in variant(run, route=rk).obstacles if not o.name.startswith("pair_")]
         n_prop = sum(o.kind == "prop" for o in singles)
         assert n_prop == math.ceil(len(singles) / 2), (
-            f"run{run} 零星 {len(singles)} 個裡道具 {n_prop} 個")
+            f"{rk} run{run} 零星 {len(singles)} 個裡道具 {n_prop} 個")
         assert all(o.kind in ("prop", "person") for o in singles)
 
 
@@ -399,8 +453,8 @@ def test_props_come_from_the_lidar_visible_whitelist():
     """★★ 道具一律來自 props.PROPS（每個都實測過會穿過光達那一層）。"""
     from props import MIN_BAND_OVERLAP_M, band_overlap, prop
 
-    for run in (1, 2, 3, 4):
-        for o in variant(run).obstacles:
+    for rk, run in ALL_VARIANTS:
+        for o in variant(run, route=rk).obstacles:
             if o.kind != "prop":
                 continue
             spec = prop(o.asset)
@@ -412,8 +466,8 @@ def test_prop_long_side_runs_along_the_corridor():
     """道具長邊要平行走廊（像靠牆擺），不能橫在走廊中間擋住整條路。"""
     from props import prop
 
-    for run in (1, 2, 3, 4):
-        for o in variant(run).obstacles:
+    for rk, run in ALL_VARIANTS:
+        for o in variant(run, route=rk).obstacles:
             if o.kind != "prop":
                 continue
             heading = spine_point(_s_along(o))[2]
@@ -429,13 +483,13 @@ def test_props_keep_clear_of_every_station_by_their_edge():
     from scene_variants import ANY_NODE_CLEARANCE_M
 
     st = S.read_station_nodes(S.ROUTING_STATION_JSON)
-    for run in (1, 2, 3, 4):
-        for o in variant(run).obstacles:
+    for rk, run in ALL_VARIANTS:
+        for o in variant(run, route=rk).obstacles:
             if o.kind != "prop":
                 continue
             d = min(math.hypot(x - o.map_x, y - o.map_y) for x, y, _ in st.values())
             assert d >= ANY_NODE_CLEARANCE_M + o.extent_radius - 1e-6, (
-                f"run{run} 的 {o.name}（{o.asset}）離最近站點 {d:.2f} m")
+                f"{rk} run{run} 的 {o.name}（{o.asset}）離最近站點 {d:.2f} m")
 
 
 def test_obstacle_footprints_sit_in_free_space():
@@ -452,8 +506,8 @@ def test_obstacle_footprints_sit_in_free_space():
 
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     wall = N._wall_distance_field()
-    for run in (1, 2, 3, 4):
-        for o in variant(run).obstacles:
+    for rk, run in ALL_VARIANTS:
+        for o in variant(run, route=rk).obstacles:
             if o.kind == "prop":
                 yaw = math.radians(o.yaw_deg)
                 hx, hy = o.size_x / 2, o.size_y / 2
@@ -466,19 +520,19 @@ def test_obstacle_footprints_sit_in_free_space():
             for x, y in corners:
                 d = wall(x, y)
                 assert d is not None and d >= 0.10, (
-                    f"run{run} 的 {o.name} 有一角 ({x:.2f},{y:.2f}) 離牆只有 {d}")
+                    f"{rk} run{run} 的 {o.name} 有一角 ({x:.2f},{y:.2f}) 離牆只有 {d}")
 
 
 def test_walker_endpoints_avoid_big_props():
     """★ 行人的終點壓在大道具裡的話，ORCA 行人會卡在那裡一直推。"""
     from scene_variants import MIN_WALKER_START_GAP_M
 
-    for run in (1, 2, 3, 4):
-        v = variant(run)
+    for rk, run in ALL_VARIANTS:
+        v = variant(run, route=rk)
         for w in v.walks:
             for end in w.waypoints:
                 for o in v.obstacles:
                     d = math.hypot(end[0] - o.map_x, end[1] - o.map_y)
                     need = MIN_WALKER_START_GAP_M + max(0.0, o.extent_radius - 0.25)
                     assert d >= need - 1e-6, (
-                        f"run{run} 的 {w.name} 端點離 {o.name} 只有 {d:.2f} m")
+                        f"{rk} run{run} 的 {w.name} 端點離 {o.name} 只有 {d:.2f} m")

@@ -41,6 +41,14 @@ RAW_DIRNAME = "05_每趟原始資料_bag與CSV"
 MODEL_INDEX_DIRNAME = "00_中文影片"
 
 
+def _route_of(meta) -> str:
+    """run.json → 路線 key。舊錄影沒有 route_key，就從 route 的終點推。"""
+    if meta.get("route_key"):
+        return meta["route_key"]
+    r = meta.get("route") or []
+    return r[1] if len(r) >= 2 else ""
+
+
 def _counts(run_dir: Path):
     """回傳該趟實際在場的 ``(靜態數, 動態數)``，讀不出來回 None。
 
@@ -114,18 +122,19 @@ def build(root: Path, arm_roots: dict[str, Path]) -> dict[str, int]:
         if cnt is None:
             unknown.append(run_dir.name)
         mode = meta.get("crowd_mode")
+        rk = _route_of(meta)
         model = meta.get("model") or meta["tag"].split("_", 1)[0]
         for mp4 in sorted((run_dir / "video").glob("*.mp4")):
             cam = mp4.stem.rsplit("_", 1)[-1]
             if cam not in CAMERA_ZH:
                 continue
-            zh = video_name(scen, idx, cam, cnt, mode)
+            zh = video_name(scen, idx, cam, cnt, mode, rk)
             _link(mp4, browse / MAIN_DIRNAME / f"模型{model}" / zh)
             # 原地再放一份：使用者會直接點進 recordings/模型xxx/
             _link(mp4, root / model_dir_name(model) / MODEL_INDEX_DIRNAME / zh)
             n += 1
         _link(run_dir, browse / RAW_DIRNAME
-              / f"模型{model}_{run_label(scen, idx, cnt, mode)}")
+              / f"模型{model}_{run_label(scen, idx, cnt, mode, rk)}")
     stats[MAIN_DIRNAME] = n
     if unknown:
         print(f"⚠ {len(unknown)} 趟讀不出場景數量，檔名標「數量不明」："
@@ -140,12 +149,13 @@ def build(root: Path, arm_roots: dict[str, Path]) -> dict[str, int]:
             scen, idx = meta["scenario"], int(meta.get("run_index", 0))
             cnt = _counts(run_dir)
             mode = meta.get("crowd_mode")
+            rk = _route_of(meta)
             for mp4 in sorted((run_dir / "video").glob("*.mp4")):
                 cam = mp4.stem.rsplit("_", 1)[-1]
                 if cam not in CAMERA_ZH:
                     continue
                 _link(mp4, browse / block
-                      / video_name(scen, idx, cam, cnt, mode))
+                      / video_name(scen, idx, cam, cnt, mode, rk))
                 m += 1
         stats[block] = m
     return stats

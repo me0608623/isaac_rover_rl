@@ -30,8 +30,9 @@ fi
 while pgrep -f "record_batch\.sh" >/dev/null 2>&1; do sleep 120; done
 _N_MAIN=$(find "$WS/recordings" -name run.json -not -path '*/00_*' -not -path '*/_*' | wc -l)
 say "主批次已結束：$_N_MAIN 趟"
-if [ "$_N_MAIN" -lt 30 ]; then
-    say "  ⚠ 主批次只有 $_N_MAIN 趟（預期 36）—— 見 reports/abl_main.log"
+# 3 模型 × 2 路線 × 3 情境 × 4 趟 = 72
+if [ "$_N_MAIN" -lt 72 ]; then
+    say "  ⚠ 主批次只有 $_N_MAIN 趟（預期 72）—— 見 reports/abl_main.log"
 fi
 
 source "$WS/setup_sim_env.sh" >/dev/null 2>&1
@@ -101,12 +102,18 @@ run_arm () {
     write_readme "$DIR"
 }
 
-run_arm "crowd_path"  CROWD_MODE=path
-run_arm "speed_0p6"   SPEED_RATE=0.6
-run_arm "speed_1p0"   SPEED_RATE=1.0
+# 對照組預設不跑（2026-09-23 使用者：「目前先不需要固定路線、速度 0.6 以及 1.0，
+# 只要 ORCA 且速度 0.7」）。要跑時：RUN_ARMS=1 bash overnight.sh
+if [ "${RUN_ARMS:-0}" = "1" ]; then
+    run_arm "crowd_path"  CROWD_MODE=path
+    run_arm "speed_0p6"   SPEED_RATE=0.6
+    run_arm "speed_1p0"   SPEED_RATE=1.0
+else
+    say "對照組略過（RUN_ARMS=1 才會跑）"
+fi
 
 say "═══ 夜間排程全部完成 ═══"
-say "主批次 $(find "$WS/recordings" -name '*.mp4' -not -path '*_v[12]_*' | wc -l) 段"
+say "主批次 $(find "$WS/recordings" -name '*.mp4' -not -path '*/_*' -not -path '*/00_*' | wc -l) 段（預期 216）"
 for a in crowd_path speed_0p6 speed_1p0; do
     say "  對照組 $a：$(find "$WS/recordings_abl/$(arm_dir "$a")" -name '*.mp4' 2>/dev/null | wc -l) 段"
 done

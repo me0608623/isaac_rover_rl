@@ -110,3 +110,15 @@ def test_collision_cell_never_shows_zero_for_a_broken_detector():
                            "走動行人": {"episodes": 1, "seconds": 0.1}}}
     assert collision_cell(ok2) == "**2**（走動行人1、道具1）"
     assert collision_cell(None) == "—"          # 舊錄影沒有這項
+
+
+def test_density_table_splits_the_two_routes():
+    """★ 兩條路線的障礙擺法不同（各自只擺在自己會開到的那段），同情境同一趟的
+    數量可以不一樣 —— 混在一起就會變成「靜5動8 / 靜6動8」看不出是哪條路線。"""
+    from make_readme import density_table
+
+    runs = [{"scenario": "mixed", "run_index": 4, "counts": (6, 8), "route_key": "c27"},
+            {"scenario": "mixed", "run_index": 4, "counts": (5, 8), "route_key": "c36"}]
+    t = "\n".join(density_table(runs))
+    assert "| c27 | 混合 | 靜6動8 |" in t
+    assert "| c36 | 混合 | 靜5動8 |" in t

@@ -57,6 +57,9 @@ def main() -> int:
                          "模擬秒拿到比實車更多次決策，錄下的行為不代表真實表現。")
     ap.add_argument("--record-width", type=int, default=1280)
     ap.add_argument("--record-height", type=int, default=720)
+    ap.add_argument("--route", default="",
+                    help="路線（c27 或 c36，見 ros_graph_spec.ROUTES）。場景變體依路線"
+                         "決定障礙擺在哪一段；空字串 = 主路線。")
     ap.add_argument("--run-index", type=int, default=0,
                     help="場景變體編號（1 起算）。>0 時障礙與行人的**數量與位置**"
                          "依 scene_variants.variant() 決定，每一趟都不一樣、"
@@ -173,9 +176,10 @@ def main() -> int:
 
     # 場景變體：USD 裡寫了**所有** run 變體的障礙，這裡只開這一趟要用的。
     _sv = None
+    _standing_yaw = {}           # 被 place_standing 擺位的站立人物朝向（給快照）
     if args.run_index >= 1:
         from scene_variants import variant as _variant
-        _sv = _variant(args.run_index)
+        _sv = _variant(args.run_index, route=args.route or None)
     _want = ({o.name for o in _sv.obstacles} if _sv is not None else None)
 
     # 情境：關掉靜態障礙就整個 prim 停用（SetActive(False) 會同時從算圖與
@@ -191,7 +195,7 @@ def main() -> int:
             _o.SetActive(_on)
             _n_on += 1 if _on else 0
         print(f"[run_isaac_sim] 情境 {scen.name}"
-              + (f"／變體 run{args.run_index}" if _sv else "")
+              + (f"／路線 {args.route or '預設'}／變體 run{args.run_index}" if _sv else "")
               + f"：靜態障礙 {_n_on}/{_n_all} 啟用"
               f"　行人走動 {'開' if scen.walks_enabled else '關'}")
 
@@ -506,6 +510,7 @@ def main() -> int:
                 if walk_driver.place_standing(_p.name, (_p.map_x, _p.map_y), _p.yaw):
                     _n_place += 1
                     _standing_now.append((_p.map_x, _p.map_y))
+                    _standing_yaw[_p.name] = _p.yaw
         if _n_off:
             print(f"[run_isaac_sim] 停用(障礙關閉，站立人物不該存在) {_n_off} 個")
         # 其餘站著的人降到地板（USD 原本懸空 17~20 cm）
@@ -640,8 +645,14 @@ def main() -> int:
                     _mx9, _my9, _ = _S9.world_to_map(_t9[0], _t9[1], 0.0)
                     _chars9.append((_c9.GetName(), _mx9, _my9,
                                     _c9.GetName() in _walking9))
+            _active9 = {c[0] for c in _chars9}
+            _walks9 = [w for w in (_sv.walks if _sv is not None
+                                   else _S9.DEFAULT_CHARACTER_WALKS)
+                       if w.name in _walking9 and w.name in _active9]
             _snap_p = write_snapshot(Path(args.pose_log).parent, build_snapshot(
-                scen.name, args.run_index, _on_obs, _chars9))
+                scen.name, args.run_index, _on_obs, _chars9, walks=_walks9,
+                standing_yaw={n: y for n, y in _standing_yaw.items() if n in _active9},
+                route=args.route or _S9.DEFAULT_ROUTE))
             print(f"[run_isaac_sim] 場景快照 → {_snap_p}"
                   f"（障礙 {len(_on_obs)}、角色 {len(_chars9)}，其中會走 "
                   f"{sum(1 for c in _chars9 if c[3])}）")

@@ -85,19 +85,29 @@ def counts_label(counts) -> str:
     return f"靜{counts[0]}動{counts[1]}"
 
 
-def run_label(scenario: str, run_index: int, counts, crowd_mode) -> str:
-    """一趟的中文標籤，例如 ``混合_ORCA互動_第4趟_靜6動8``。"""
+def route_label(route) -> str:
+    """``c27`` → ``路線c27``；空的回空字串（舊錄影沒有路線維度）。
+
+    ⚠ 2026-09-23 加入第二條路線：兩條路線同一個情境、同一趟的影片檔名
+      原本會一模一樣，放進同一個資料夾就互相蓋掉。
+    """
+    return f"路線{route}_" if route else ""
+
+
+def run_label(scenario: str, run_index: int, counts, crowd_mode, route="") -> str:
+    """一趟的中文標籤，例如 ``路線c27_混合_ORCA互動_第4趟_靜6動8``。"""
     if scenario not in SCENARIO_ZH:
         raise ValueError(f"未知情境 {scenario!r}")
     n_dyn = counts[1] if counts else 0
-    return (f"{SCENARIO_ZH[scenario]}_{crowd_mode_label(crowd_mode, n_dyn)}"
+    return (f"{route_label(route)}{SCENARIO_ZH[scenario]}_"
+            f"{crowd_mode_label(crowd_mode, n_dyn)}"
             f"_第{run_index}趟_{counts_label(counts)}")
 
 
 def video_name(scenario: str, run_index: int, camera: str, counts,
-               crowd_mode) -> str:
+               crowd_mode, route="") -> str:
     """一個影片檔的中文名。"""
     if camera not in CAMERA_ZH:
         raise ValueError(f"未知視角 {camera!r}")
-    return (f"{run_label(scenario, run_index, counts, crowd_mode)}_"
+    return (f"{run_label(scenario, run_index, counts, crowd_mode, route)}_"
             f"{CAMERA_ZH[camera]}.mp4")
