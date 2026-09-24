@@ -158,6 +158,19 @@ def main() -> int:
     rclpy.init()
     node = Mon()
     results = []
+
+    # ⚠⚠ 2026-09-24：用模擬時間計時時，節點剛建好還沒收到 /clock，now() 是 0。
+    #   第一段的 t0 被記成 0，「耗時」就多算了開跑前整段模擬時間（~55~62 s）——
+    #   72 趟裡有 27 趟的去程被這樣灌水，被誤認成「routing 慢 60 秒」。
+    #   車其實收到路徑 1 秒內就開動。先等到時鐘有值再開始。
+    if args.sim_time:
+        import time as _time
+        _deadline = _time.monotonic() + 30.0
+        while node.get_clock().now().nanoseconds == 0:
+            rclpy.spin_once(node, timeout_sec=0.1)
+            if _time.monotonic() > _deadline:
+                print("  [FAIL] 30 s 內沒收到 /clock，無法用模擬時間計時")
+                return 1
     origin = args.start
 
     for leg_i, goal in enumerate(legs, 1):

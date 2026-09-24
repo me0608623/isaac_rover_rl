@@ -92,3 +92,41 @@ def test_oriented_rect_rotates_the_long_side():
     xs = [p[0] for p in v]
     assert max(ys) - min(ys) == pytest.approx(2.0)
     assert max(xs) - min(xs) == pytest.approx(0.2)
+
+
+# ── 朝向平滑（2026-09-24：行人快停下時一格轉 180°）──────────────────────
+
+def test_turn_is_rate_limited_not_a_snap():
+    import math
+    from orca_crowd import turn_toward
+    y = turn_toward(0.0, math.pi, 0.1)
+    assert abs(y - 0.1) < 1e-9 or abs(y + 0.1) < 1e-9
+
+
+def test_turn_takes_the_short_way_across_pi():
+    import math
+    from orca_crowd import turn_toward
+    y = turn_toward(3.0, -3.0, 0.1)          # 真正差 0.28 rad，往正向繞過 π
+    assert y > 3.0
+
+
+def test_small_turn_reaches_target():
+    from orca_crowd import turn_toward
+    assert turn_toward(0.0, 0.05, 0.1) == 0.05
+
+
+def test_none_target_keeps_facing_and_first_value_is_taken():
+    from orca_crowd import turn_toward
+    assert turn_toward(1.2, None, 0.1) == 1.2
+    assert turn_toward(None, 0.7, 0.1) == 0.7
+
+
+def test_back_and_forth_velocity_does_not_flip_the_body():
+    """★ ORCA 快停下時速度方向前後翻轉：身體朝向每步最多動 max_step。"""
+    import math
+    from orca_crowd import turn_toward
+    y, ys = 0.0, []
+    for i in range(30):
+        y = turn_toward(y, 0.0 if i % 2 else math.pi, 2.5 / 60.0)
+        ys.append(y)
+    assert max(abs(b - a) for a, b in zip(ys, ys[1:])) <= 2.5 / 60.0 + 1e-9

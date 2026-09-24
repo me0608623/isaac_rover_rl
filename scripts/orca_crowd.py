@@ -52,6 +52,30 @@ def next_goal_index(idx: int, pos, waypoints, tol: float = GOAL_TOLERANCE_M) -> 
     return idx
 
 
+#: 行人轉身角速度上限（rad/s）。一般人轉身約 2~3 rad/s；180° 至少要 1.3 s。
+MAX_TURN_RATE_RAD_S = 2.5
+#: 低於這個速度就不跟著速度方向轉（ORCA 快停下時速度方向會亂跳）。
+FACING_MIN_SPEED_M_S = 0.2
+
+
+def turn_toward(prev, target, max_step: float):
+    """從 ``prev`` 往 ``target`` 轉，每步最多 ``max_step`` rad（走最短方向）。
+
+    ⚠ 2026-09-24 使用者回報「行人快停下時會突然轉身 180°，像原地抖一下」。
+    原本朝向直接取 ORCA 速度方向，速度 > 0.05 m/s 就更新：ORCA 把人推到
+    快停下時，速度方向在前後之間翻轉，Character_02 一趟翻 90 次。
+    ``prev`` 為 None（第一次）直接採用 ``target``；``target`` 為 None 維持原樣。
+    """
+    if target is None:
+        return prev
+    if prev is None:
+        return target
+    d = (target - prev + math.pi) % (2.0 * math.pi) - math.pi
+    if abs(d) <= max_step:
+        return target
+    return prev + math.copysign(max_step, d)
+
+
 def pref_velocity(pos, goal, speed: float):
     """朝目標的偏好速度。站在目標上時回 (0, 0)。
 
@@ -116,6 +140,7 @@ class OrcaCrowd:
         self._goal_idx: list[int] = []
         self._phase: list[float] = []
         self._ids: list[int] = []
+        self._yaw: list = []
 
         for w in walks:
             if not w.waypoints:
@@ -129,6 +154,7 @@ class OrcaCrowd:
             self._walks.append(w)
             self._goal_idx.append(len(w.waypoints) - 1)
             self._phase.append(0.0)
+            self._yaw.append(None)
 
         # 車：也是 agent，但每步由外部覆寫位置與速度。
         self._robot_id = self._sim.addAgent(
@@ -174,7 +200,8 @@ class OrcaCrowd:
             spd = math.hypot(vel[0], vel[1])
             self._phase[k] = (self._phase[k]
                               + phase_advance(ds, max(spd, 1e-3))) % (2.0 * math.pi)
-            # 朝向看行進方向；幾乎靜止時保留上一次的朝向（避免原地亂轉）。
-            yaw = math.atan2(vel[1], vel[0]) if spd > 0.05 else None
-            out[self._names[k]] = (pos[0], pos[1], yaw, self._phase[k], spd)
+            # 朝向看行進方向，但限制轉身速度；快停下時保留原朝向（見 turn_toward）。
+            target = math.atan2(vel[1], vel[0]) if spd > FACING_MIN_SPEED_M_S else None
+            self._yaw[k] = turn_toward(self._yaw[k], target, MAX_TURN_RATE_RAD_S * self._dt)
+            out[self._names[k]] = (pos[0], pos[1], self._yaw[k], self._phase[k], spd)
         return out

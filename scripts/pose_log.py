@@ -188,6 +188,35 @@ def _lerp_phase(a: float, b: float, u: float) -> float:
     return (a + d * u) % two_pi
 
 
+def smooth_crowd_yaw(rows: list) -> list:
+    """回放前把每個行人的朝向套上與第一遍相同的轉身限制（見 orca_crowd.turn_toward）。
+
+    2026-09-24 之前錄的 crowd.csv 存的是**原始**朝向（快停下時一格翻 180°）。
+    回放照抄會把抖動錄進影片；在這裡補做平滑，舊資料只要重錄回放即可修正。
+    新資料第一遍已經平滑過，再套一次結果不變（已在限速內的序列不會被改）。
+    """
+    import dataclasses
+    from collections import defaultdict
+
+    from orca_crowd import FACING_MIN_SPEED_M_S, MAX_TURN_RATE_RAD_S, turn_toward
+
+    by = defaultdict(list)
+    for r in rows:
+        by[r.name].append(r)
+    out = []
+    for name, rs in by.items():
+        rs.sort(key=lambda r: r.t)
+        prev_t, y = None, None
+        for r in rs:
+            dt = 0.0 if prev_t is None else max(0.0, r.t - prev_t)
+            target = r.yaw if r.speed > FACING_MIN_SPEED_M_S else None
+            y = turn_toward(y, target, MAX_TURN_RATE_RAD_S * dt) if y is not None else (
+                r.yaw if target is None else target)
+            prev_t = r.t
+            out.append(dataclasses.replace(r, yaw=y))
+    return out
+
+
 def crowd_at(rows, t: float):
     """取 ``t`` 時刻每個行人的 ``(x, y, yaw, phase, speed)``。
 

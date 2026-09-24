@@ -91,6 +91,9 @@ def main() -> int:
     crowd_rows = []
     if args.crowd_log and Path(args.crowd_log).exists():
         crowd_rows = parse_crowd_rows(Path(args.crowd_log).read_text().splitlines())
+        # 2026-09-24：舊 crowd.csv 的朝向未平滑（快停下時一格翻 180°），回放時補做
+        from pose_log import smooth_crowd_yaw
+        crowd_rows = smooth_crowd_yaw(crowd_rows)
         print(f"[replay] 行人軌跡 {len(crowd_rows)} 筆 / "
               f"{len({r.name for r in crowd_rows})} 人", flush=True)
 

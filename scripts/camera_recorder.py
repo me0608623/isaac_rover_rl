@@ -22,7 +22,7 @@ import math
 from pathlib import Path
 
 from sim_cameras import (CAMERAS, camera_pose, look_at_rotation, pull_fraction,
-                         pulled_eye, smooth_pull, wall_ray, _apply)
+                         pulled_eye, side_rays, smooth_pull, wall_ray, _apply)
 
 CAMERA_ROOT = "/World/RecCams"
 
@@ -183,6 +183,18 @@ class CameraRecorder:
                     if gh is not None and (hit is None or gh < hit):
                         hit = gh
                 target = pull_fraction(length, hit)
+                # 兩側射線：牆角在旁邊時也要拉近（比例套回中線）
+                for so, sd, sl in side_rays(spec, robot_xy, yaw, floor_z):
+                    sh = None
+                    try:
+                        sh = _nearest_wall_hit(so, sd, sl)
+                    except Exception:
+                        pass
+                    if self._grid is not None:
+                        g2 = self._grid.first_hit(so[0], so[1], sd[0], sd[1], sl, skip=0.4)
+                        if g2 is not None and (sh is None or g2 < sh):
+                            sh = g2
+                    target = min(target, pull_fraction(sl, sh))
                 f = smooth_pull(self._pull.get(spec.name, 1.0), target)
                 self._pull[spec.name] = f
                 if f < 0.999:

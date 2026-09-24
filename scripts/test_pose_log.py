@@ -153,3 +153,22 @@ def test_crowd_at_on_empty_log_returns_nothing():
     from pose_log import crowd_at
 
     assert crowd_at([], 1.0) == {}
+
+
+def test_replay_smooths_raw_yaw_flips():
+    """★ 2026-09-24：舊 crowd.csv 的原始朝向會一格翻 180°；回放要平滑掉。"""
+    import math
+    from orca_crowd import MAX_TURN_RATE_RAD_S
+    from pose_log import CrowdSample, smooth_crowd_yaw
+    rows = [CrowdSample(i / 30.0, "A", 0.0, 0.0, (0.0 if i % 2 else math.pi), 0.0, 0.5)
+            for i in range(20)]
+    ys = [r.yaw for r in smooth_crowd_yaw(rows)]
+    step = MAX_TURN_RATE_RAD_S / 30.0 + 1e-9
+    assert all(abs((b - a + math.pi) % (2 * math.pi) - math.pi) <= step
+               for a, b in zip(ys, ys[1:]))
+
+
+def test_smoothing_leaves_a_steady_walk_unchanged():
+    from pose_log import CrowdSample, smooth_crowd_yaw
+    rows = [CrowdSample(i / 30.0, "A", i * 0.03, 0.0, 0.3, 0.0, 0.9) for i in range(10)]
+    assert [r.yaw for r in smooth_crowd_yaw(rows)] == [0.3] * 10
