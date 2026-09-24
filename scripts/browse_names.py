@@ -62,6 +62,35 @@ ARM_ZH = {
     "speed_1p0": "對照_速度1.0",
 }
 
+#: 索引樹的分層資料夾名（2026-09-24 使用者要求「命名清楚、歸類」）。
+#: 一個模型 72 支影片平鋪在同一層很難找，改成 模型 → 路線 → 情境 三層。
+#: 數字前綴讓檔案總管照設計順序排，而不是照注音/字碼。
+ROUTE_DIR = {
+    "c27": "路線A_c28往返c27_主路線",
+    "c36": "路線B_c28往返c36_延伸到c36",
+}
+#: 沒有路線欄位的舊錄影
+NO_ROUTE_DIR = "路線未標示_舊錄影"
+SCENARIO_DIR = {
+    "static": "1_純靜態_只有靜止障礙",
+    "dynamic": "2_動態_只有走動行人",
+    "mixed": "3_混合_靜止障礙加走動行人",
+}
+
+
+def route_dir(route) -> str:
+    """路線 key → 分層資料夾名；未知的路線照實標出來，不要歸到別條。"""
+    if not route:
+        return NO_ROUTE_DIR
+    return ROUTE_DIR.get(route, f"路線{route}")
+
+
+def scenario_dir(scenario: str) -> str:
+    if scenario not in SCENARIO_DIR:
+        raise ValueError(f"未知情境 {scenario!r}")
+    return SCENARIO_DIR[scenario]
+
+
 #: 數量讀不出來時用的字樣 —— 寧可寫「不明」也不要填 0。
 UNKNOWN_COUNTS = "數量不明"
 

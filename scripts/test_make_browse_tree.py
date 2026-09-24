@@ -8,6 +8,11 @@ import os
 from make_browse_tree import BROWSE_DIRNAME, MAIN_DIRNAME, RAW_DIRNAME, build
 
 
+def _mp4s(d):
+    """索引樹分層之後（模型/路線/情境），影片不在第一層 —— 遞迴收。"""
+    return sorted(p.name for p in d.rglob("*.mp4"))
+
+
 def _mk_run(root, tag, scenario, idx, cams=("topdown", "chase", "oblique"),
             obstacles=6, chars=13, walking=8, standing=5, crowd_mode="orca"):
     d = root / tag
@@ -31,11 +36,10 @@ def test_build_links_every_video(tmp_path):
     _mk_run(root, "sa4r2_mixed_run04", "mixed", 4)
     stats = build(root, {})
     assert stats[MAIN_DIRNAME] == 3
-    got = sorted(p.name for p in
-                 (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2").iterdir())
-    assert got == ["混合_ORCA互動_第4趟_靜6動8_俯視.mp4",
-                   "混合_ORCA互動_第4趟_靜6動8_斜前方.mp4",
-                   "混合_ORCA互動_第4趟_靜6動8_車後.mp4"]
+    got = _mp4s(root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2")
+    assert got == ["sa4r2_混合_ORCA互動_第4趟_靜6動8_俯視.mp4",
+                   "sa4r2_混合_ORCA互動_第4趟_靜6動8_斜前方.mp4",
+                   "sa4r2_混合_ORCA互動_第4趟_靜6動8_車後.mp4"]
 
 
 def test_directory_links_are_relative_and_resolve(tmp_path):
@@ -75,14 +79,15 @@ def test_rebuild_removes_stale_links(tmp_path):
     root.mkdir()
     d = _mk_run(root, "sa4r2_mixed_run01", "mixed", 1)
     build(root, {})
-    stale = (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2"
-             / "混合_ORCA互動_第1趟_靜6動8_俯視.mp4")
+    stale = (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2" / "路線未標示_舊錄影"
+            / "3_混合_靜止障礙加走動行人"
+             / "sa4r2_混合_ORCA互動_第1趟_靜6動8_俯視.mp4")
     assert stale.exists()
     (d / "run.json").write_text(json.dumps(
         {"tag": "sa4r2_mixed_run01", "scenario": "static", "run_index": 1,
          "crowd_mode": "orca"}))
     build(root, {})
-    assert not stale.is_symlink()
+    assert not stale.exists()
 
 
 def test_skips_archive_and_browse_dirs(tmp_path):
@@ -116,8 +121,7 @@ def test_counts_come_from_the_run_log_not_the_plan_table(tmp_path):
     _mk_run(root, "sa4r2_mixed_run04", "mixed", 4,
             obstacles=6, chars=11, walking=6, standing=5)
     build(root, {})
-    names = [p.name for p in
-             (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2").iterdir()]
+    names = _mp4s(root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2")
     assert all("靜6動6" in n for n in names), names
 
 
@@ -128,8 +132,7 @@ def test_missing_log_is_labelled_unknown_not_zero(tmp_path):
     d = _mk_run(root, "sa4r2_mixed_run04", "mixed", 4)
     (d / "isaac_nav.log").unlink()
     build(root, {})
-    names = [p.name for p in
-             (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2").iterdir()]
+    names = _mp4s(root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2")
     assert all("數量不明" in n for n in names), names
 
 
@@ -142,11 +145,10 @@ def test_each_model_folder_gets_its_own_chinese_index(tmp_path):
     (root / "模型sa4r2").mkdir(parents=True)
     _mk_run(root / "模型sa4r2", "sa4r2_mixed_run04", "mixed", 4)
     build(root, {})
-    got = sorted(p.name for p in
-                 (root / "模型sa4r2" / MODEL_INDEX_DIRNAME).iterdir())
-    assert got == ["混合_ORCA互動_第4趟_靜6動8_俯視.mp4",
-                   "混合_ORCA互動_第4趟_靜6動8_斜前方.mp4",
-                   "混合_ORCA互動_第4趟_靜6動8_車後.mp4"]
+    got = _mp4s(root / "模型sa4r2" / MODEL_INDEX_DIRNAME)
+    assert got == ["sa4r2_混合_ORCA互動_第4趟_靜6動8_俯視.mp4",
+                   "sa4r2_混合_ORCA互動_第4趟_靜6動8_斜前方.mp4",
+                   "sa4r2_混合_ORCA互動_第4趟_靜6動8_車後.mp4"]
 
 
 def test_model_index_is_not_mistaken_for_a_run(tmp_path):
@@ -170,13 +172,13 @@ def test_model_index_is_rebuilt_not_appended(tmp_path):
     d = _mk_run(root / "模型sa4r2", "sa4r2_mixed_run04", "mixed", 4)
     build(root, {})
     idx = root / "模型sa4r2" / MODEL_INDEX_DIRNAME
-    assert len(list(idx.iterdir())) == 3
+    assert len(_mp4s(idx)) == 3
     (d / "isaac_nav.log").write_text(
         "[run_isaac_sim] 情境 mixed／變體 run4：靜態障礙 3/18 啟用　行人走動 開\n"
         "[run_isaac_sim] 程序化步態：5 人 / 40 個擺動關節 / 2 人沿路徑移動"
         "　站立人物擺位 3 個　腳底對地 3 個\n")
     build(root, {})
-    got = sorted(p.name for p in idx.iterdir())
+    got = _mp4s(idx)
     assert len(got) == 3 and all("靜3動2" in g for g in got), got
 
 
@@ -190,8 +192,9 @@ def test_video_entries_are_real_files_not_shortcuts(tmp_path):
     root.mkdir()
     _mk_run(root, "sa4r2_mixed_run04", "mixed", 4)
     build(root, {})
-    link = (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2"
-            / "混合_ORCA互動_第4趟_靜6動8_俯視.mp4")
+    link = (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2" / "路線未標示_舊錄影"
+            / "3_混合_靜止障礙加走動行人"
+            / "sa4r2_混合_ORCA互動_第4趟_靜6動8_俯視.mp4")
     assert not link.is_symlink(), "影片不可以是符號連結"
     assert link.is_file() and link.read_text() == "x"
     assert link.stat().st_nlink >= 2, "應與本體共用同一個 inode"
@@ -205,8 +208,9 @@ def test_copying_a_video_elsewhere_still_opens(tmp_path):
     root.mkdir()
     _mk_run(root, "sa4r2_mixed_run04", "mixed", 4)
     build(root, {})
-    src = (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2"
-           / "混合_ORCA互動_第4趟_靜6動8_俯視.mp4")
+    src = (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2" / "路線未標示_舊錄影"
+            / "3_混合_靜止障礙加走動行人"
+           / "sa4r2_混合_ORCA互動_第4趟_靜6動8_俯視.mp4")
     dest_dir = root / BROWSE_DIRNAME / "上傳"
     dest_dir.mkdir()
     _sh.copy(src, dest_dir / src.name)       # 檔案總管的「複製」
@@ -238,3 +242,27 @@ def test_rebuild_still_removes_its_own_stale_blocks(tmp_path):
     (stale / "x.mp4").write_text("old")
     build(root, {})
     assert not stale.exists()
+
+
+def test_videos_are_grouped_by_model_route_scenario(tmp_path):
+    """★ 2026-09-24 使用者：「把檔案命名清楚、整理歸類」。一個模型 72 支
+    影片平鋪在一層很難找 —— 分成 模型/路線/情境 三層，檔名開頭帶模型名
+    （複製到別處後仍認得出來）。"""
+    root = tmp_path / "rec"
+    (root / "模型sa4r2").mkdir(parents=True)
+    d = _mk_run(root / "模型sa4r2", "sa4r2_c36_static_run02", "static", 2,
+                obstacles=4, chars=5, walking=0, standing=2)
+    meta = json.loads((d / "run.json").read_text())
+    meta["route_key"] = "c36"
+    (d / "run.json").write_text(json.dumps(meta))
+    build(root, {})
+    leaf = (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2"
+            / "路線B_c28往返c36_延伸到c36" / "1_純靜態_只有靜止障礙")
+    assert _mp4s(leaf) == [
+        "sa4r2_路線c36_純靜態_不走動_第2趟_靜7動0_俯視.mp4",
+        "sa4r2_路線c36_純靜態_不走動_第2趟_靜7動0_斜前方.mp4",
+        "sa4r2_路線c36_純靜態_不走動_第2趟_靜7動0_車後.mp4"]
+    # 原地索引同樣分層（少了模型那一層，因為已經在模型資料夾裡）
+    from make_browse_tree import MODEL_INDEX_DIRNAME
+    assert _mp4s(root / "模型sa4r2" / MODEL_INDEX_DIRNAME
+                 / "路線B_c28往返c36_延伸到c36" / "1_純靜態_只有靜止障礙") == _mp4s(leaf)

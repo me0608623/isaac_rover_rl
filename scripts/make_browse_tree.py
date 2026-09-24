@@ -26,12 +26,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from browse_names import ARM_DIR, ARM_ZH, CAMERA_ZH, run_label, video_name
+from browse_names import (ARM_DIR, ARM_ZH, CAMERA_ZH, route_dir, run_label,
+                          scenario_dir, video_name)
 from run_layout import (BROWSE_DIRNAME, MODEL_DIR_PREFIX,
                         model_dir_name, run_dirs)
 from scene_counts import counts_from_log
 
-MAIN_DIRNAME = "01_主批次_三模型正式錄影"
+MAIN_DIRNAME = "01_正式錄影_依模型_路線_情境分類"
 RAW_DIRNAME = "05_每趟原始資料_bag與CSV"
 
 #: 每個模型資料夾裡**再放一份**自己的中文影片索引。
@@ -101,6 +102,16 @@ def _link(target: Path, link: Path) -> None:
         link.symlink_to(os.path.relpath(target.resolve(), link.parent.resolve()))
 
 
+def video_relpath(model: str, route, scenario: str, zh: str) -> Path:
+    """一支影片在索引樹裡的位置：``模型/路線/情境/<模型>_<中文檔名>``。
+
+    檔名前面再加一次模型名：使用者會把影片複製到別處（例如 `上傳/`），
+    離開資料夾之後檔名本身要能說出是哪個模型。
+    """
+    return (Path(f"模型{model}") / route_dir(route) / scenario_dir(scenario)
+            / f"{model}_{zh}")
+
+
 def _runs(root: Path):
     """回傳 ``(run_dir, meta)``。「什麼算一趟」的定義在 `run_layout`。"""
     return [(d, json.loads((d / "run.json").read_text())) for d in run_dirs(root)]
@@ -129,9 +140,11 @@ def build(root: Path, arm_roots: dict[str, Path]) -> dict[str, int]:
             if cam not in CAMERA_ZH:
                 continue
             zh = video_name(scen, idx, cam, cnt, mode, rk)
-            _link(mp4, browse / MAIN_DIRNAME / f"模型{model}" / zh)
+            rel = video_relpath(model, rk, scen, zh)
+            _link(mp4, browse / MAIN_DIRNAME / rel)
             # 原地再放一份：使用者會直接點進 recordings/模型xxx/
-            _link(mp4, root / model_dir_name(model) / MODEL_INDEX_DIRNAME / zh)
+            _link(mp4, root / model_dir_name(model) / MODEL_INDEX_DIRNAME
+                  / rel.relative_to(rel.parts[0]))
             n += 1
         _link(run_dir, browse / RAW_DIRNAME
               / f"模型{model}_{run_label(scen, idx, cnt, mode, rk)}")
@@ -173,7 +186,7 @@ def main() -> int:
     print(f"  合計 {total} 個影片連結"
           f" + {len(_runs(root))} 個原始資料夾連結")
     for mdir in sorted(root.glob(f"{MODEL_DIR_PREFIX}*")):
-        k = len(list((mdir / MODEL_INDEX_DIRNAME).glob("*.mp4"))) \
+        k = len(list((mdir / MODEL_INDEX_DIRNAME).rglob("*.mp4"))) \
             if (mdir / MODEL_INDEX_DIRNAME).is_dir() else 0
         print(f"  {mdir.name}/{MODEL_INDEX_DIRNAME}  {k:4d} 個（原地索引）")
     if total == 0:
