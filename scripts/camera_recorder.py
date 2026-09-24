@@ -33,6 +33,54 @@ RAY_IGNORE_PREFIXES = ("/World/Characters", "/World/SimObstacles",
                        CAMERA_ROOT)
 
 
+GRID_IGNORE_PREFIXES = ("/World/Characters", "/World/charger_rover4_5_0",
+                        "/World/MapPatch", CAMERA_ROOT)
+
+
+def build_wall_grid(stage, floor_z: float, center_xy, radius: float = 60.0):
+    """從**算圖網格**建 2D 牆面格網（見 wall_grid 模組說明）。
+
+    ⚠ 2026-09-24：只靠 PhysX 射線時，門/內凹處沒有碰撞體，相機照樣進牆。
+    只取車附近 ``radius`` 內、跨過相機高度帶的三角形。
+    """
+    import numpy as np
+    from pxr import Usd, UsdGeom
+    from wall_grid import SLICE_HEIGHTS_M, WallGrid, slice_segments, triangles_from_mesh
+
+    zlo = floor_z + min(SLICE_HEIGHTS_M)
+    zhi = floor_z + max(SLICE_HEIGHTS_M)
+    cache = UsdGeom.XformCache()
+    segs = []
+    for prim in Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies()):
+        # 道具（置物櫃等）要算：相機埋進櫃子裡一樣全黑。人會動、車是自己，不算。
+        if str(prim.GetPath()).startswith(GRID_IGNORE_PREFIXES):
+            continue
+        if prim.GetTypeName() != "Mesh":
+            continue
+        img = UsdGeom.Imageable(prim)
+        if img.ComputeVisibility() == UsdGeom.Tokens.invisible:
+            continue                                   # 隱形碰撞體（障礙、補丁）不是牆
+        m = UsdGeom.Mesh(prim)
+        pts = m.GetPointsAttr().Get()
+        cnt = m.GetFaceVertexCountsAttr().Get()
+        idx = m.GetFaceVertexIndicesAttr().Get()
+        if not pts or cnt is None or idx is None:
+            continue
+        P = np.asarray(pts, dtype=float)
+        X = np.asarray(cache.GetLocalToWorldTransform(prim), dtype=float)
+        P = P @ X[:3, :3] + X[3, :3]                   # pxr row-vector
+        if (np.hypot(P[:, 0] - center_xy[0], P[:, 1] - center_xy[1]).min() > radius
+                or P[:, 2].max() < zlo or P[:, 2].min() > zhi):
+            continue
+        tris = triangles_from_mesh(P, cnt, idx)
+        tz = tris[:, :, 2]
+        tris = tris[(tz.max(1) >= zlo) & (tz.min(1) <= zhi)]
+        for h in SLICE_HEIGHTS_M:
+            segs.append(slice_segments(tris, floor_z + h))
+    segs = np.concatenate(segs) if segs else np.zeros((0, 2, 2))
+    return WallGrid.from_segments(segs), len(segs)
+
+
 def _nearest_wall_hit(origin, unit_dir, length):
     """PhysX 射線：回傳最近的建築擋點距離，沒有回 None。"""
     from omni.physx import get_physx_scene_query_interface
@@ -69,6 +117,8 @@ class CameraRecorder:
         self._pull: dict[str, float] = {}             # 各相機目前的拉近比例
         self.pulled_frames: dict[str, int] = {}       # 統計：被牆擋而拉近的幀數
         self._ray_warned = False
+        self._grid = None                             # 第一次 update_poses 時建
+        self._grid_failed = False
 
         UsdGeom.Scope.Define(stage, CAMERA_ROOT)
 
@@ -103,6 +153,17 @@ class CameraRecorder:
         """把三台相機挪到相對車體的正確位置。"""
         from pxr import Gf, UsdGeom
 
+        if self._grid is None and not self._grid_failed:
+            import time as _t
+            t0 = _t.perf_counter()
+            try:
+                self._grid, nseg = build_wall_grid(self._stage, floor_z, robot_xy)
+                print(f"[camera] 牆面格網：{nseg} 段、{int(self._grid.occ.sum())} 格佔據"
+                      f"（{_t.perf_counter() - t0:.1f} s）", flush=True)
+            except Exception as e:
+                self._grid_failed = True
+                print(f"[camera] ⚠ 牆面格網建立失敗，只用 PhysX 射線：{e!r}", flush=True)
+
         for spec, cam in self._cams:
             eye, (axis, ang) = camera_pose(spec, robot_xy, yaw, floor_z)
             if spec.avoid_walls:
@@ -115,6 +176,12 @@ class CameraRecorder:
                         print(f"[camera] ⚠ 避牆射線失敗，{spec.name} 不避牆：{e!r}",
                               flush=True)
                         self._ray_warned = True
+                if self._grid is not None:
+                    # 射線是水平的（同高），格網距離＝射線距離
+                    gh = self._grid.first_hit(origin[0], origin[1], udir[0], udir[1],
+                                              length, skip=0.4)
+                    if gh is not None and (hit is None or gh < hit):
+                        hit = gh
                 target = pull_fraction(length, hit)
                 f = smooth_pull(self._pull.get(spec.name, 1.0), target)
                 self._pull[spec.name] = f
