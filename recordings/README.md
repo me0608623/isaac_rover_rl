@@ -1,20 +1,43 @@
-> [!IMPORTANT]
-> **這份 README 描述的是舊路線（c28 ↔ c25）那一批**，資料已移到
-> `_舊路線c28-c25_待確認後刪/`。新批次（c28 ↔ c36、分層抽樣、靜態障礙隨機抽成
-> 站立行人或 Isaac 道具）**尚未錄製**；錄完 `overnight.sh` 會自動重新產生這份檔案。
-
 # 論文錄影產物
 
 Isaac Sim 裡跑**與實車同一套 ROS stack**（ndt_localizer + campusrover_routing
 + rover_rl policy + vo_safety_node）的 3F 走廊來回導航。
 
-**3 模型 × 3 情境 × 4 難度 × 3 視角 = 108 段影片**，每趟附一份命名同步的 rosbag。
+**3 模型 × 2 路線 × 3 情境 × 4 難度 × 3 視角 = 216 段影片**，每趟附一份命名同步的 rosbag。
 
-## 檔名怎麼看
+路線：`c27`（c28 ↔ c27）、`c36`（c28 ↔ c36）。主路線是 c27；c36 是 c27 再往西延伸 3.8 m。
 
-這一組的影片在各趟的 `video/` 底下（`<tag>_{topdown,chase,oblique}.mp4`）。
-中文命名的索引在主批次那邊：`recordings/00_影片總覽/`，
-這一組在它的 `02`~`04` 區塊底下。
+## 要挑影片看 → 找「中文影片」資料夾
+
+裡面是**中文命名的符號連結**，檔名直接寫清楚是哪個模型、什麼情境、
+第幾趟、場上有幾個靜態物幾個動態物、哪個機位。
+
+兩個地方都有，內容一樣（同一支程式產生，不會走樣）：
+
+```
+recordings/模型sa4r2/00_中文影片/    ← 點進某個模型時就在眼前
+recordings/00_影片總覽/              ← 三個模型 + 三組對照，一次看全
+```
+
+```
+00_影片總覽/
+    01_主批次_三模型正式錄影/模型sa5r2/混合_ORCA互動_第4趟_靜6動8_俯視.mp4
+    02_對照_行人走固定路線_非ORCA/   03_對照_速度0.6/   04_對照_速度1.0/
+    05_每趟原始資料_bag與CSV/模型sa5r2_混合_ORCA互動_第4趟_靜6動8/
+```
+
+索引裡的影片是 **hard link**，在檔案總管裡就是普通檔案：**可以直接複製、
+拖拉、上傳**，而且和本體共用同一份資料、不佔額外空間。
+
+⚠ 以前用的是捷徑（符號連結），複製到別的資料夾就打不開 —— 因為捷徑裡
+寫的是相對路徑，換了層數就指到不存在的地方。已改掉。
+
+你可以在 `00_影片總覽/` 底下自己開資料夾（例如 `上傳/`）放要給人的片子，
+重建索引**不會**刪掉它 —— 只有 `NN_` 開頭的區塊是程式管的。
+
+⚠ 因為是 hard link，`du -sh recordings` 會把對照組的影片也算進來
+（本體在 `recordings_abl/`）。要看真實總量請一起算：
+`du -csh recordings recordings_abl`（目前 74G）。
 
 索引裡的檔名格式：**`{情境}_{行人走法}_第N趟_靜{靜態數}動{動態數}_{機位}`**
 
@@ -45,11 +68,14 @@ Isaac Sim 裡跑**與實車同一套 ROS stack**（ndt_localizer + campusrover_r
 
 各情境 × 各趟實際在場的數量（**由各趟的 log 數出來**，不是抄計畫表）：
 
-| 情境 | 第1趟 | 第2趟 | 第3趟 | 第4趟 |
-|---|---|---|---|---|
-| 純靜態 | 靜5動0 | 靜8動0 | 靜11動0 | 靜14動0 |
-| 動態 | 靜3動2 | 靜4動4 | 靜4動6 | 靜5動8 |
-| 混合 | 靜3動2 | 靜4動4 | 靜5動6 | 靜6動8 |
+| 路線 | 情境 | 第1趟 | 第2趟 | 第3趟 | 第4趟 |
+|---|---|---|---|---|---|
+| c27 | 純靜態 | 靜5動0 | 靜7動0 | 靜10動0 | 靜8動0 |
+| c27 | 動態 | 靜0動2 | 靜0動4 | 靜0動6 | 靜0動8 |
+| c27 | 混合 | 靜3動2 | 靜4動4 | 靜5動6 | 靜6動8 |
+| c36 | 純靜態 | 靜5動0 | 靜7動0 | 靜9動0 | 靜11動0 |
+| c36 | 動態 | 靜0動2 | 靜0動4 | 靜0動6 | 靜0動8 |
+| c36 | 混合 | 靜3動2 | 靜4動4 | 靜5動6 | 靜6動8 |
 
 重建索引（重錄後跑一次就好，只建連結、不複製檔案）：
 
@@ -156,6 +182,13 @@ Character_10~13、19 的原位剛好就在**走廊中線上** —— 這就是 s
 光達卻讀成 0.42~0.45 m。**論文要講「多近」請用真值幾何的距離**
 （`scripts/nearest_source.py` 的預測值），不要用光達讀值。
 
+車體半徑約 0.35 m，真實距離 0.26 m 代表車身**可能已經碰到**障礙物。
+新批次起每一趟都記「真的碰到」（逐趟明細表的欄位，`collisions.csv`）：
+每一步拿外觀車身大小的盒子問物理引擎有沒有別人的碰撞體，不受光達限制。
+物理引擎裡的底盤碰撞體只是一片 0.17 × 0.47 m 的薄板，行人又對車做了
+接觸過濾，所以**不能用物理碰撞回報**——兩者都會讓擦撞顯示成 0；實測它還會
+把「底盤薄板插在地板裡」記成整趟撞牆，已拿掉。
+
 方法本身的誤差：預測−實測的逐趟中位都落在 −0.22 ~ 0.00 m。p05 到 −0.65 m ——
 那是佔據圖上有實機掃描留下的雜物、模擬場景裡沒有，所以「離牆距離」偏小。
 這只會**高估**牆的佔比，不影響「沒有一個碰撞幀是牆」的結論。
@@ -163,60 +196,110 @@ Character_10~13、19 的原位剛好就在**走廊中線上** —— 這就是 s
 重算：`PYTHONPATH= .venv/bin/python scripts/nearest_source.py recordings`
 （完整報表在 `reports/nearest_source.txt`）
 
-### 依模型 × 情境彙總
+### 依模型 × 路線 × 情境彙總
 
-| 模型 | 情境 | 抵達 | 最近障礙(最差) | 碰撞幀 | 平均每段耗時 |
-|---|---|---|---|---|---|
-| `sa4r2` | static | 8/8 段 | 0.45 m | 0 | 63.0 s |
-| `sa4r2` | dynamic | 8/8 段 | 0.62 m | 0 | 39.7 s |
-| `sa4r2` | mixed | 8/8 段 | 0.55 m | 0 | 38.9 s |
-| `sa4r3` | static | 7/8 段 | 0.42 m | 7 | 76.4 s |
-| `sa4r3` | dynamic | 8/8 段 | 0.65 m | 0 | 49.3 s |
-| `sa4r3` | mixed | 8/8 段 | 0.45 m | 4 | 54.7 s |
-| `sa5r2` | static | 7/8 段 | 0.46 m | 0 | 77.4 s |
-| `sa5r2` | dynamic | 8/8 段 | 0.52 m | 0 | 72.0 s |
-| `sa5r2` | mixed | 8/8 段 | 0.47 m | 0 | 78.7 s |
+| 模型 | 路線 | 情境 | 抵達 | 最近障礙(最差) | 碰撞幀 | 真的碰到 | 平均每段耗時 |
+|---|---|---|---|---|---|---|---|
+| `sa4r2` | c27 | static | 8/8 段 | 0.61 m | 0 | 0 | 29.3 s |
+| `sa4r2` | c27 | dynamic | 8/8 段 | 0.76 m | 0 | 0 | 41.9 s |
+| `sa4r2` | c27 | mixed | 8/8 段 | 0.46 m | 0 | 1 | 35.6 s |
+| `sa4r2` | c36 | static | 8/8 段 | 0.61 m | 0 | 0 | 39.3 s |
+| `sa4r2` | c36 | dynamic | 8/8 段 | 0.72 m | 0 | 0 | 46.6 s |
+| `sa4r2` | c36 | mixed | 8/8 段 | 0.59 m | 0 | 0 | 35.3 s |
+| `sa4r3` | c27 | static | 8/8 段 | 0.62 m | 0 | 0 | 36.1 s |
+| `sa4r3` | c27 | dynamic | 8/8 段 | 0.58 m | 0 | 0 | 42.1 s |
+| `sa4r3` | c27 | mixed | 8/8 段 | 0.45 m | 0 | 2 | 62.2 s |
+| `sa4r3` | c36 | static | 8/8 段 | 0.63 m | 0 | 0 | 38.4 s |
+| `sa4r3` | c36 | dynamic | 8/8 段 | 0.72 m | 0 | 0 | 32.2 s |
+| `sa4r3` | c36 | mixed | 8/8 段 | 0.58 m | 0 | 0 | 34.1 s |
+| `sa5r2` | c27 | static | 8/8 段 | 0.69 m | 0 | 0 | 54.1 s |
+| `sa5r2` | c27 | dynamic | 8/8 段 | 0.73 m | 0 | 0 | 45.0 s |
+| `sa5r2` | c27 | mixed | 8/8 段 | 0.63 m | 0 | 0 | 65.4 s |
+| `sa5r2` | c36 | static | 8/8 段 | 0.73 m | 0 | 0 | 37.1 s |
+| `sa5r2` | c36 | dynamic | 8/8 段 | 0.73 m | 0 | 0 | 39.0 s |
+| `sa5r2` | c36 | mixed | 8/8 段 | 0.72 m | 0 | 0 | 46.8 s |
 
 ### 逐趟明細
 
-| tag | 模型 | 情境 | 難度 | 抵達 | 最近障礙 | 碰撞幀 | 影片 |
-|---|---|---|---|---|---|---|---|
-| `sa4r2_dynamic_run01` | sa4r2 | dynamic | run01 | 2/2 | 0.87 m | 0 | 3 |
-| `sa4r2_dynamic_run02` | sa4r2 | dynamic | run02 | 2/2 | 0.64 m | 0 | 3 |
-| `sa4r2_dynamic_run03` | sa4r2 | dynamic | run03 | 2/2 | 0.73 m | 0 | 3 |
-| `sa4r2_dynamic_run04` | sa4r2 | dynamic | run04 | 2/2 | 0.62 m | 0 | 3 |
-| `sa4r2_mixed_run01` | sa4r2 | mixed | run01 | 2/2 | 0.88 m | 0 | 3 |
-| `sa4r2_mixed_run02` | sa4r2 | mixed | run02 | 2/2 | 0.72 m | 0 | 3 |
-| `sa4r2_mixed_run03` | sa4r2 | mixed | run03 | 2/2 | 0.55 m | 0 | 3 |
-| `sa4r2_mixed_run04` | sa4r2 | mixed | run04 | 2/2 | 0.60 m | 0 | 3 |
-| `sa4r2_static_run01` | sa4r2 | static | run01 | 2/2 | 0.82 m | 0 | 3 |
-| `sa4r2_static_run02` | sa4r2 | static | run02 | 2/2 | 0.68 m | 0 | 3 |
-| `sa4r2_static_run03` | sa4r2 | static | run03 | 2/2 | 0.45 m | 0 | 3 |
-| `sa4r2_static_run04` | sa4r2 | static | run04 | 2/2 | 0.47 m | 0 | 3 |
-| `sa4r3_dynamic_run01` | sa4r3 | dynamic | run01 | 2/2 | 0.82 m | 0 | 3 |
-| `sa4r3_dynamic_run02` | sa4r3 | dynamic | run02 | 2/2 | 0.65 m | 0 | 3 |
-| `sa4r3_dynamic_run03` | sa4r3 | dynamic | run03 | 2/2 | 0.70 m | 0 | 3 |
-| `sa4r3_dynamic_run04` | sa4r3 | dynamic | run04 | 2/2 | 0.71 m | 0 | 3 |
-| `sa4r3_mixed_run01` | sa4r3 | mixed | run01 | 2/2 | 1.07 m | 0 | 3 |
-| `sa4r3_mixed_run02` | sa4r3 | mixed | run02 | 2/2 | 0.84 m | 0 | 3 |
-| `sa4r3_mixed_run03` | sa4r3 | mixed | run03 | 2/2 | 0.70 m | 0 | 3 |
-| `sa4r3_mixed_run04` | sa4r3 | mixed | run04 | 2/2 | 0.45 m | 4 | 3 |
-| `sa4r3_static_run01` | sa4r3 | static | run01 | 2/2 | 0.89 m | 0 | 3 |
-| `sa4r3_static_run02` | sa4r3 | static | run02 | 2/2 | 0.64 m | 0 | 3 |
-| `sa4r3_static_run03` | sa4r3 | static | run03 | 1/2 | 0.42 m | 1 | 3 |
-| `sa4r3_static_run04` | sa4r3 | static | run04 | 2/2 | 0.45 m | 6 | 3 |
-| `sa5r2_dynamic_run01` | sa5r2 | dynamic | run01 | 2/2 | 1.08 m | 0 | 3 |
-| `sa5r2_dynamic_run02` | sa5r2 | dynamic | run02 | 2/2 | 0.74 m | 0 | 3 |
-| `sa5r2_dynamic_run03` | sa5r2 | dynamic | run03 | 2/2 | 0.52 m | 0 | 3 |
-| `sa5r2_dynamic_run04` | sa5r2 | dynamic | run04 | 2/2 | 0.55 m | 0 | 3 |
-| `sa5r2_mixed_run01` | sa5r2 | mixed | run01 | 2/2 | 1.25 m | 0 | 3 |
-| `sa5r2_mixed_run02` | sa5r2 | mixed | run02 | 2/2 | 0.74 m | 0 | 3 |
-| `sa5r2_mixed_run03` | sa5r2 | mixed | run03 | 2/2 | 0.47 m | 0 | 3 |
-| `sa5r2_mixed_run04` | sa5r2 | mixed | run04 | 2/2 | 0.73 m | 0 | 3 |
-| `sa5r2_static_run01` | sa5r2 | static | run01 | 2/2 | 0.87 m | 0 | 3 |
-| `sa5r2_static_run02` | sa5r2 | static | run02 | 2/2 | 0.58 m | 0 | 3 |
-| `sa5r2_static_run03` | sa5r2 | static | run03 | 2/2 | 0.51 m | 0 | 3 |
-| `sa5r2_static_run04` | sa5r2 | static | run04 | 1/2 | 0.46 m | 0 | 3 |
+| tag | 模型 | 情境 | 難度 | 抵達 | 最近障礙 | 碰撞幀 | 真的碰到 | 影片 |
+|---|---|---|---|---|---|---|---|---|
+| `sa4r2_c27_dynamic_run01` | sa4r2 | dynamic | run01 | 2/2 | 0.90 m | 0 | 0 | 3 |
+| `sa4r2_c27_dynamic_run02` | sa4r2 | dynamic | run02 | 2/2 | 0.76 m | 0 | 0 | 3 |
+| `sa4r2_c27_dynamic_run03` | sa4r2 | dynamic | run03 | 2/2 | 0.80 m | 0 | 0 | 3 |
+| `sa4r2_c27_dynamic_run04` | sa4r2 | dynamic | run04 | 2/2 | 0.81 m | 0 | 0 | 3 |
+| `sa4r2_c27_mixed_run01` | sa4r2 | mixed | run01 | 2/2 | 0.72 m | 0 | 0 | 3 |
+| `sa4r2_c27_mixed_run02` | sa4r2 | mixed | run02 | 2/2 | 0.46 m | 0 | 0 | 3 |
+| `sa4r2_c27_mixed_run03` | sa4r2 | mixed | run03 | 2/2 | 0.56 m | 0 | 0 | 0 |
+| `sa4r2_c27_mixed_run04` | sa4r2 | mixed | run04 | 2/2 | 0.48 m | 0 | **1**（走動行人1） | 3 |
+| `sa4r2_c27_static_run01` | sa4r2 | static | run01 | 2/2 | 0.93 m | 0 | 0 | 3 |
+| `sa4r2_c27_static_run02` | sa4r2 | static | run02 | 2/2 | 0.94 m | 0 | 0 | 3 |
+| `sa4r2_c27_static_run03` | sa4r2 | static | run03 | 2/2 | 0.91 m | 0 | 0 | 3 |
+| `sa4r2_c27_static_run04` | sa4r2 | static | run04 | 2/2 | 0.61 m | 0 | 0 | 3 |
+| `sa4r2_c36_dynamic_run01` | sa4r2 | dynamic | run01 | 2/2 | 0.84 m | 0 | 0 | 3 |
+| `sa4r2_c36_dynamic_run02` | sa4r2 | dynamic | run02 | 2/2 | 0.72 m | 0 | 0 | 3 |
+| `sa4r2_c36_dynamic_run03` | sa4r2 | dynamic | run03 | 2/2 | 0.74 m | 0 | 0 | 3 |
+| `sa4r2_c36_dynamic_run04` | sa4r2 | dynamic | run04 | 2/2 | 0.80 m | 0 | 0 | 3 |
+| `sa4r2_c36_mixed_run01` | sa4r2 | mixed | run01 | 2/2 | 0.81 m | 0 | 0 | 3 |
+| `sa4r2_c36_mixed_run02` | sa4r2 | mixed | run02 | 2/2 | 0.72 m | 0 | 0 | 3 |
+| `sa4r2_c36_mixed_run03` | sa4r2 | mixed | run03 | 2/2 | 0.72 m | 0 | 0 | 3 |
+| `sa4r2_c36_mixed_run04` | sa4r2 | mixed | run04 | 2/2 | 0.59 m | 0 | 0 | 3 |
+| `sa4r2_c36_static_run01` | sa4r2 | static | run01 | 2/2 | 0.91 m | 0 | 0 | 3 |
+| `sa4r2_c36_static_run02` | sa4r2 | static | run02 | 2/2 | 0.95 m | 0 | 0 | 3 |
+| `sa4r2_c36_static_run03` | sa4r2 | static | run03 | 2/2 | 0.78 m | 0 | 0 | 3 |
+| `sa4r2_c36_static_run04` | sa4r2 | static | run04 | 2/2 | 0.61 m | 0 | 0 | 3 |
+| `sa4r3_c27_dynamic_run01` | sa4r3 | dynamic | run01 | 2/2 | 1.01 m | 0 | 0 | 3 |
+| `sa4r3_c27_dynamic_run02` | sa4r3 | dynamic | run02 | 2/2 | 0.73 m | 0 | 0 | 3 |
+| `sa4r3_c27_dynamic_run03` | sa4r3 | dynamic | run03 | 2/2 | 0.58 m | 0 | 0 | 3 |
+| `sa4r3_c27_dynamic_run04` | sa4r3 | dynamic | run04 | 2/2 | 0.81 m | 0 | 0 | 3 |
+| `sa4r3_c27_mixed_run01` | sa4r3 | mixed | run01 | 2/2 | 0.81 m | 0 | 0 | 3 |
+| `sa4r3_c27_mixed_run02` | sa4r3 | mixed | run02 | 2/2 | 0.46 m | 0 | 0 | 3 |
+| `sa4r3_c27_mixed_run03` | sa4r3 | mixed | run03 | 2/2 | 0.60 m | 0 | 0 | 3 |
+| `sa4r3_c27_mixed_run04` | sa4r3 | mixed | run04 | 2/2 | 0.45 m | 0 | **2**（走動行人2） | 3 |
+| `sa4r3_c27_static_run01` | sa4r3 | static | run01 | 2/2 | 1.07 m | 0 | 0 | 3 |
+| `sa4r3_c27_static_run02` | sa4r3 | static | run02 | 2/2 | 0.99 m | 0 | 0 | 3 |
+| `sa4r3_c27_static_run03` | sa4r3 | static | run03 | 2/2 | 0.87 m | 0 | 0 | 3 |
+| `sa4r3_c27_static_run04` | sa4r3 | static | run04 | 2/2 | 0.62 m | 0 | 0 | 3 |
+| `sa4r3_c36_dynamic_run01` | sa4r3 | dynamic | run01 | 2/2 | 0.92 m | 0 | 0 | 3 |
+| `sa4r3_c36_dynamic_run02` | sa4r3 | dynamic | run02 | 2/2 | 0.76 m | 0 | 0 | 3 |
+| `sa4r3_c36_dynamic_run03` | sa4r3 | dynamic | run03 | 2/2 | 0.72 m | 0 | 0 | 3 |
+| `sa4r3_c36_dynamic_run04` | sa4r3 | dynamic | run04 | 2/2 | 0.80 m | 0 | 0 | 3 |
+| `sa4r3_c36_mixed_run01` | sa4r3 | mixed | run01 | 2/2 | 0.84 m | 0 | 0 | 3 |
+| `sa4r3_c36_mixed_run02` | sa4r3 | mixed | run02 | 2/2 | 0.75 m | 0 | 0 | 3 |
+| `sa4r3_c36_mixed_run03` | sa4r3 | mixed | run03 | 2/2 | 0.58 m | 0 | 0 | 3 |
+| `sa4r3_c36_mixed_run04` | sa4r3 | mixed | run04 | 2/2 | 0.60 m | 0 | 0 | 3 |
+| `sa4r3_c36_static_run01` | sa4r3 | static | run01 | 2/2 | 1.07 m | 0 | 0 | 3 |
+| `sa4r3_c36_static_run02` | sa4r3 | static | run02 | 2/2 | 1.07 m | 0 | 0 | 3 |
+| `sa4r3_c36_static_run03` | sa4r3 | static | run03 | 2/2 | 0.66 m | 0 | 0 | 3 |
+| `sa4r3_c36_static_run04` | sa4r3 | static | run04 | 2/2 | 0.63 m | 0 | 0 | 3 |
+| `sa5r2_c27_dynamic_run01` | sa5r2 | dynamic | run01 | 2/2 | 1.05 m | 0 | 0 | 3 |
+| `sa5r2_c27_dynamic_run02` | sa5r2 | dynamic | run02 | 2/2 | 0.80 m | 0 | 0 | 3 |
+| `sa5r2_c27_dynamic_run03` | sa5r2 | dynamic | run03 | 2/2 | 0.73 m | 0 | 0 | 3 |
+| `sa5r2_c27_dynamic_run04` | sa5r2 | dynamic | run04 | 2/2 | 0.74 m | 0 | 0 | 3 |
+| `sa5r2_c27_mixed_run01` | sa5r2 | mixed | run01 | 2/2 | 0.82 m | 0 | 0 | 3 |
+| `sa5r2_c27_mixed_run02` | sa5r2 | mixed | run02 | 2/2 | 0.64 m | 0 | 0 | 3 |
+| `sa5r2_c27_mixed_run03` | sa5r2 | mixed | run03 | 2/2 | 0.72 m | 0 | 0 | 3 |
+| `sa5r2_c27_mixed_run04` | sa5r2 | mixed | run04 | 2/2 | 0.63 m | 0 | 0 | 3 |
+| `sa5r2_c27_static_run01` | sa5r2 | static | run01 | 2/2 | 0.96 m | 0 | 0 | 3 |
+| `sa5r2_c27_static_run02` | sa5r2 | static | run02 | 2/2 | 1.03 m | 0 | 0 | 3 |
+| `sa5r2_c27_static_run03` | sa5r2 | static | run03 | 2/2 | 1.03 m | 0 | 0 | 3 |
+| `sa5r2_c27_static_run04` | sa5r2 | static | run04 | 2/2 | 0.69 m | 0 | 0 | 3 |
+| `sa5r2_c36_dynamic_run01` | sa5r2 | dynamic | run01 | 2/2 | 0.83 m | 0 | 0 | 3 |
+| `sa5r2_c36_dynamic_run02` | sa5r2 | dynamic | run02 | 2/2 | 0.74 m | 0 | 0 | 3 |
+| `sa5r2_c36_dynamic_run03` | sa5r2 | dynamic | run03 | 2/2 | 0.73 m | 0 | 0 | 3 |
+| `sa5r2_c36_dynamic_run04` | sa5r2 | dynamic | run04 | 2/2 | 0.80 m | 0 | 0 | 3 |
+| `sa5r2_c36_mixed_run01` | sa5r2 | mixed | run01 | 2/2 | 0.72 m | 0 | 0 | 3 |
+| `sa5r2_c36_mixed_run02` | sa5r2 | mixed | run02 | 2/2 | 0.73 m | 0 | 0 | 3 |
+| `sa5r2_c36_mixed_run03` | sa5r2 | mixed | run03 | 2/2 | 0.75 m | 0 | 0 | 3 |
+| `sa5r2_c36_mixed_run04` | sa5r2 | mixed | run04 | 2/2 | 0.72 m | 0 | 0 | 3 |
+| `sa5r2_c36_static_run01` | sa5r2 | static | run01 | 2/2 | 0.93 m | 0 | 0 | 3 |
+| `sa5r2_c36_static_run02` | sa5r2 | static | run02 | 2/2 | 1.28 m | 0 | 0 | 3 |
+| `sa5r2_c36_static_run03` | sa5r2 | static | run03 | 2/2 | 0.97 m | 0 | 0 | 3 |
+| `sa5r2_c36_static_run04` | sa5r2 | static | run04 | 2/2 | 0.73 m | 0 | 0 | 3 |
+
+「真的碰到」= 外觀車身盒子與別人的碰撞體重疊（`scripts/collision_log.py`），
+不受光達 0.5 m 最小量測距離限制。**「偵測器失效」不是零次**，是那一趟
+偵測器沒過檢查（重疊查詢沒看到車自己、或開跑後故意去查一個障礙／行人卻查不到），
+那一趟的擦撞次數不可信。
 
 ## 目錄長相
 
