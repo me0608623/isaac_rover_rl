@@ -44,8 +44,10 @@ class CameraSpec:
     focal_length_mm: float = 18.0
     #: True = 相機會被牆擋時往車子方向拉近（見 pulled_eye）
     avoid_walls: bool = False
-    #: 除了中線，再往左右各偏這麼多（m）各檢查一條射線；0 = 只看中線。
-    #: 2026-09-24：車後鏡頭在轉角時，牆角不在「車→鏡頭」中線上，卻佔掉畫面一側。
+    #: 鏡頭可往走廊中間橫移的最大距離（m）；0 = 不橫移。
+    #: 2026-09-24：車貼牆走時，車後鏡頭也貼著同一面牆，牆佔掉畫面一側。
+    #: 試過「兩側射線」與「周圍淨空」都無效（車本身就在牆邊，拉近沒用），
+    #: 改成量鏡頭左右離牆距離、往寬的一側移（每幀最多 2 cm，平順）。
     side_clearance_m: float = 0.0
 
 
@@ -71,7 +73,7 @@ CAMERAS: tuple[CameraSpec, ...] = (
     # 高度刻意高過行人頭頂（1.8 m），起點人群密集時才不會整台車被擋住。
     CameraSpec("chase", (-2.8, 0.0, 2.0), follow_yaw=True,
                target_offset=(3.0, 0.0, 0.3), target_follow_yaw=True,
-               focal_length_mm=20.0, avoid_walls=True, side_clearance_m=0.5),
+               focal_length_mm=20.0, avoid_walls=True, side_clearance_m=0.8),
     # 斜前方旁觀：前方 3.2 m、左 1.4 m、高 1.7 m，回頭看車。
     # 側向 1.4 m 是貼著 CORRIDOR_HALF_WIDTH_M 的上限走，再多就進牆。
     CameraSpec("oblique", (3.2, 1.4, 1.7), follow_yaw=True,
@@ -205,28 +207,3 @@ def pulled_eye(origin, unit_dir, length: float, fraction: float):
     return (origin[0] + unit_dir[0] * k, origin[1] + unit_dir[1] * k,
             origin[2] + unit_dir[2] * k)
 
-
-def side_rays(cam: CameraSpec, robot_xy, yaw: float, floor_z: float):
-    """中線兩側的射線：``[(origin, unit_dir, length), ...]``（不含中線）。
-
-    終點是鏡頭位置往左右水平偏 ``side_clearance_m``；起點同中線（車、鏡頭高度）。
-    """
-    if cam.side_clearance_m <= 0:
-        return []
-    origin, d, length = wall_ray(cam, robot_xy, yaw, floor_z)
-    if length <= 0:
-        return []
-    eye = pulled_eye(origin, d, length, 1.0)
-    px, py = -d[1], d[0]                       # 水平垂直方向
-    n = math.hypot(px, py)
-    if n < 1e-9:
-        return []
-    px, py = px / n, py / n
-    out = []
-    for sgn in (1.0, -1.0):
-        e = (eye[0] + sgn * px * cam.side_clearance_m,
-             eye[1] + sgn * py * cam.side_clearance_m, eye[2])
-        v = (e[0] - origin[0], e[1] - origin[1], e[2] - origin[2])
-        L = math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
-        out.append((origin, (v[0] / L, v[1] / L, v[2] / L), L))
-    return out

@@ -91,6 +91,47 @@ class WallGrid:
         ok = (i >= 0) & (j >= 0) & (i < self.occ.shape[0]) & (j < self.occ.shape[1])
         self.occ[i[ok], j[ok]] = True
 
+    def dilated(self, radius: float) -> "WallGrid":
+        """回傳把牆往外加厚 ``radius`` 的新格網（圓盤膨脹）。
+
+        用途：鏡頭「周圍」有沒有牆 —— 在加厚後的格網上，鏡頭點落在佔據格
+        就代表離牆不到 ``radius``（牆在旁邊或斜後方也算，射線抓不到的那種）。
+        """
+        g = WallGrid(self.x0, self.y0, *self.occ.shape, cell=self.cell)
+        r = int(math.ceil(radius / self.cell))
+        occ = self.occ
+        out = occ.copy()
+        nx, ny = occ.shape
+        for di in range(-r, r + 1):
+            for dj in range(-r, r + 1):
+                if di * di + dj * dj > r * r or (di == 0 and dj == 0):
+                    continue
+                src = occ[max(0, -di):nx - max(0, di), max(0, -dj):ny - max(0, dj)]
+                out[max(0, di):nx - max(0, -di), max(0, dj):ny - max(0, -dj)] |= src
+        g.occ = out
+        return g
+
+    def first_entry(self, ox: float, oy: float, dx: float, dy: float, length: float):
+        """沿射線找「第一次**進入**佔據區」的距離（起點若已在佔據區，先走出去才算）。
+
+        車貼著牆走時，車本身就在加厚範圍內；不跳過的話鏡頭會永遠被拉到最近。
+        """
+        n = math.hypot(dx, dy)
+        if n < 1e-9 or length <= 0:
+            return None
+        ux, uy = dx / n, dy / n
+        step = self.cell * 0.5
+        k = 0.0
+        inside = self.occupied(ox, oy)
+        while k <= length:
+            occ = self.occupied(ox + ux * k, oy + uy * k)
+            if inside and not occ:
+                inside = False
+            elif not inside and occ:
+                return k
+            k += step
+        return None
+
     def occupied(self, x: float, y: float) -> bool:
         i = int(math.floor((x - self.x0) / self.cell))
         j = int(math.floor((y - self.y0) / self.cell))

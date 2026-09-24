@@ -22,7 +22,7 @@ import math
 from pathlib import Path
 
 from sim_cameras import (CAMERAS, camera_pose, look_at_rotation, pull_fraction,
-                         pulled_eye, side_rays, smooth_pull, wall_ray, _apply)
+                         pulled_eye, smooth_pull, wall_ray, _apply)
 
 CAMERA_ROOT = "/World/RecCams"
 
@@ -119,6 +119,8 @@ class CameraRecorder:
         self._ray_warned = False
         self._grid = None                             # 第一次 update_poses 時建
         self._grid_failed = False
+        self._shift: dict[str, float] = {}           # 各相機目前的橫移量（m）
+        self.shifted_frames: dict[str, int] = {}      # 統計：橫移的幀數
 
         UsdGeom.Scope.Define(stage, CAMERA_ROOT)
 
@@ -183,23 +185,36 @@ class CameraRecorder:
                     if gh is not None and (hit is None or gh < hit):
                         hit = gh
                 target = pull_fraction(length, hit)
-                # 兩側射線：牆角在旁邊時也要拉近（比例套回中線）
-                for so, sd, sl in side_rays(spec, robot_xy, yaw, floor_z):
-                    sh = None
-                    try:
-                        sh = _nearest_wall_hit(so, sd, sl)
-                    except Exception:
-                        pass
-                    if self._grid is not None:
-                        g2 = self._grid.first_hit(so[0], so[1], sd[0], sd[1], sl, skip=0.4)
-                        if g2 is not None and (sh is None or g2 < sh):
-                            sh = g2
-                    target = min(target, pull_fraction(sl, sh))
+
                 f = smooth_pull(self._pull.get(spec.name, 1.0), target)
                 self._pull[spec.name] = f
+                moved = False
                 if f < 0.999:
                     self.pulled_frames[spec.name] = self.pulled_frames.get(spec.name, 0) + 1
                     eye = pulled_eye(origin, udir, length, f)
+                    moved = True
+                # 橫移到走廊中間：車貼牆走時，鏡頭在車正後方也貼著同一面牆，
+                # 拉近沒用（2026-09-24 試過兩版）。量鏡頭左右離牆多遠，往寬的一側移。
+                if spec.side_clearance_m > 0 and self._grid is not None:
+                    px, py = -udir[1], udir[0]
+                    n = (px * px + py * py) ** 0.5 or 1.0
+                    px, py = px / n, py / n
+                    look = 2.5
+                    dl = self._grid.first_hit(eye[0], eye[1], px, py, look) or look
+                    dr = self._grid.first_hit(eye[0], eye[1], -px, -py, look) or look
+                    want = 0.0
+                    if min(dl, dr) < spec.side_clearance_m + 0.6:
+                        want = max(-spec.side_clearance_m, min(spec.side_clearance_m,
+                                                               (dl - dr) / 2.0))
+                    prev = self._shift.get(spec.name, 0.0)
+                    step = 0.02                               # 每幀最多 2 cm，約 0.6 m/s
+                    sh = prev + max(-step, min(step, want - prev))
+                    self._shift[spec.name] = sh
+                    if abs(sh) > 1e-3:
+                        eye = (eye[0] + px * sh, eye[1] + py * sh, eye[2])
+                        self.shifted_frames[spec.name] = self.shifted_frames.get(spec.name, 0) + 1
+                        moved = True
+                if moved:
                     tx, ty, tz = _apply(spec.target_offset, yaw, spec.target_follow_yaw)
                     axis, ang = look_at_rotation(
                         eye, (robot_xy[0] + tx, robot_xy[1] + ty, floor_z + tz))
