@@ -131,3 +131,42 @@ def test_look_at_straight_down_is_stable():
     assert all(math.isfinite(v) for v in r[0]) and math.isfinite(r[1])
     d = Gf.Rotation(*r).TransformDir(Gf.Vec3d(0, 0, -1))
     assert Gf.Vec3d(d)[2] == pytest.approx(-1.0, abs=1e-6)
+
+
+# ── 相機避牆（2026-09-24 使用者：斜前方轉角穿牆、畫面全黑或全白）──────────
+
+def test_oblique_and_chase_avoid_walls_topdown_does_not():
+    from sim_cameras import CAMERAS
+    by = {c.name: c for c in CAMERAS}
+    assert by["oblique"].avoid_walls and by["chase"].avoid_walls
+    assert not by["topdown"].avoid_walls        # 俯視在 5 m 高，這棟樓沒有天花板
+
+
+def test_pull_stops_short_of_the_wall():
+    from sim_cameras import WALL_MARGIN_M, pull_fraction
+    assert pull_fraction(3.5, None) == 1.0
+    f = pull_fraction(3.5, 2.0)
+    assert abs(f * 3.5 - (2.0 - WALL_MARGIN_M)) < 1e-9
+
+
+def test_pull_never_collapses_onto_the_car():
+    from sim_cameras import MIN_PULL_FRACTION, pull_fraction
+    assert pull_fraction(3.5, 0.1) == MIN_PULL_FRACTION
+
+
+def test_pull_in_is_immediate_release_is_gradual():
+    """★ 拉近要當幀生效（否則那一幀就在牆裡）；放遠要慢，不然畫面抽動。"""
+    from sim_cameras import RELEASE_PER_FRAME, smooth_pull
+    assert smooth_pull(1.0, 0.4) == 0.4
+    assert abs(smooth_pull(0.4, 1.0) - (0.4 + RELEASE_PER_FRAME)) < 1e-12
+
+
+def test_wall_ray_ends_at_the_nominal_eye():
+    import math
+    from sim_cameras import CAMERAS, camera_pose, pulled_eye, wall_ray
+    cam = [c for c in CAMERAS if c.name == "oblique"][0]
+    o, d, L = wall_ray(cam, (1.0, 2.0), 0.7, 0.1)
+    eye, _ = camera_pose(cam, (1.0, 2.0), 0.7, 0.1)
+    assert all(abs(a - b) < 1e-9 for a, b in zip(pulled_eye(o, d, L, 1.0), eye))
+    assert abs(o[2] - eye[2]) < 1e-9            # 同高：水平射線，不會打到地板
+    assert abs(math.hypot(*d) - 1.0) < 1e-9

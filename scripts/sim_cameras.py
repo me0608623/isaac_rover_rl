@@ -42,6 +42,8 @@ class CameraSpec:
     target_follow_yaw: bool = True
     #: 視野角（度）
     focal_length_mm: float = 18.0
+    #: True = 相機會被牆擋時往車子方向拉近（見 pulled_eye）
+    avoid_walls: bool = False
 
 
 #: USD 相機的預設光圈（mm）。FOV = 2*atan(aperture / (2*focal))。
@@ -66,12 +68,12 @@ CAMERAS: tuple[CameraSpec, ...] = (
     # 高度刻意高過行人頭頂（1.8 m），起點人群密集時才不會整台車被擋住。
     CameraSpec("chase", (-2.8, 0.0, 2.0), follow_yaw=True,
                target_offset=(3.0, 0.0, 0.3), target_follow_yaw=True,
-               focal_length_mm=20.0),
+               focal_length_mm=20.0, avoid_walls=True),
     # 斜前方旁觀：前方 3.2 m、左 1.4 m、高 1.7 m，回頭看車。
     # 側向 1.4 m 是貼著 CORRIDOR_HALF_WIDTH_M 的上限走，再多就進牆。
     CameraSpec("oblique", (3.2, 1.4, 1.7), follow_yaw=True,
                target_offset=(0.0, 0.0, 0.5), target_follow_yaw=True,
-               focal_length_mm=24.0),
+               focal_length_mm=24.0, avoid_walls=True),
 )
 
 
@@ -148,3 +150,54 @@ def camera_pose(cam: CameraSpec, robot_xy, yaw: float, floor_z: float):
     tx, ty, tz = _apply(cam.target_offset, yaw, cam.target_follow_yaw)
     target = (robot_xy[0] + tx, robot_xy[1] + ty, floor_z + tz)
     return eye, look_at_rotation(eye, target)
+
+
+# ── 相機避牆（2026-09-24）──────────────────────────────────────────────
+# ⚠ 使用者回報：斜前方視角在走廊轉角、盡頭與迴轉時「有幾秒穿進牆裡，
+#   畫面全黑或全白」。固定的車體座標位移在直走廊沒問題，但車一靠近牆或
+#   轉向牆，前方 3.2 m 就在牆裡。
+#   作法：每幀從車（相機同高）朝預定相機位置打射線，被牆擋就把相機拉到
+#   擋點前 WALL_MARGIN_M；拉近「立刻」、放遠「慢慢」，畫面才不會抽動。
+
+#: 相機與牆面保持的距離（m）。相機近裁切面 0.05 m，留 0.3 m 才不會拍到牆的截面。
+WALL_MARGIN_M = 0.3
+#: 拉得再近也不小於這個比例 —— 貼到車身上就什麼都看不到了。
+MIN_PULL_FRACTION = 0.15
+#: 放遠時每幀最多恢復多少比例（30 fps 下約 1 秒回到原位）。
+RELEASE_PER_FRAME = 0.035
+
+
+def wall_ray(cam: CameraSpec, robot_xy, yaw: float, floor_z: float):
+    """回傳 ``(origin, unit_dir, length)``：從車（相機高度）到預定相機位置的射線。"""
+    eye, _ = camera_pose(cam, robot_xy, yaw, floor_z)
+    origin = (robot_xy[0], robot_xy[1], eye[2])
+    d = (eye[0] - origin[0], eye[1] - origin[1], eye[2] - origin[2])
+    n = math.sqrt(d[0] ** 2 + d[1] ** 2 + d[2] ** 2)
+    if n < 1e-9:
+        return origin, (1.0, 0.0, 0.0), 0.0
+    return origin, (d[0] / n, d[1] / n, d[2] / n), n
+
+
+def pull_fraction(length: float, hit_distance) -> float:
+    """射線在 ``hit_distance`` 被擋 → 相機該停在全長的多少比例（0~1]。
+
+    ``hit_distance`` 為 None（沒擋到）回 1.0。
+    """
+    if hit_distance is None or length <= 0:
+        return 1.0
+    f = (hit_distance - WALL_MARGIN_M) / length
+    return max(MIN_PULL_FRACTION, min(1.0, f))
+
+
+def smooth_pull(prev: float, target: float) -> float:
+    """拉近立刻跟上（避免任何一幀進牆），放遠每幀最多恢復 RELEASE_PER_FRAME。"""
+    if target <= prev:
+        return target
+    return min(target, prev + RELEASE_PER_FRAME)
+
+
+def pulled_eye(origin, unit_dir, length: float, fraction: float):
+    """沿射線取相機位置。"""
+    k = length * fraction
+    return (origin[0] + unit_dir[0] * k, origin[1] + unit_dir[1] * k,
+            origin[2] + unit_dir[2] * k)

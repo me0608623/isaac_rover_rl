@@ -277,6 +277,7 @@ def main() -> int:
                   f"{rate:4.1f} 幀/s  剩 {eta/60:5.1f} 分", flush=True)
 
     print(f"[replay] 完成：{rec.frames_written} 幀/視角", flush=True)
+    print(f"[replay] 相機避牆拉近幀數：{getattr(rec, 'pulled_frames', {})}", flush=True)
     rec.close()
     app.close()
     return 0

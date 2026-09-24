@@ -21,9 +21,34 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from sim_cameras import CAMERAS, camera_pose
+from sim_cameras import (CAMERAS, camera_pose, look_at_rotation, pull_fraction,
+                         pulled_eye, smooth_pull, wall_ray, _apply)
 
 CAMERA_ROOT = "/World/RecCams"
+
+#: 避牆射線要忽略的東西：只該被**建築**擋，不是被人、障礙、車自己、
+#: 地圖補丁（隱形天花板層）擋 —— 那些不會讓畫面變黑白，拉近反而會抖。
+RAY_IGNORE_PREFIXES = ("/World/Characters", "/World/SimObstacles",
+                       "/World/charger_rover4_5_0", "/World/MapPatch",
+                       CAMERA_ROOT)
+
+
+def _nearest_wall_hit(origin, unit_dir, length):
+    """PhysX 射線：回傳最近的建築擋點距離，沒有回 None。"""
+    from omni.physx import get_physx_scene_query_interface
+
+    best = [None]
+
+    def report(hit):
+        path = str(hit.collision)
+        if not path.startswith(RAY_IGNORE_PREFIXES):
+            if best[0] is None or hit.distance < best[0]:
+                best[0] = hit.distance
+        return True                                   # 繼續收集
+
+    get_physx_scene_query_interface().raycast_all(
+        origin, unit_dir, length, report)
+    return best[0]
 
 
 class CameraRecorder:
@@ -41,6 +66,9 @@ class CameraRecorder:
         self._index: list[tuple[int, float]] = []
         self._cams = []
         self._writers = []
+        self._pull: dict[str, float] = {}             # 各相機目前的拉近比例
+        self.pulled_frames: dict[str, int] = {}       # 統計：被牆擋而拉近的幀數
+        self._ray_warned = False
 
         UsdGeom.Scope.Define(stage, CAMERA_ROOT)
 
@@ -77,6 +105,25 @@ class CameraRecorder:
 
         for spec, cam in self._cams:
             eye, (axis, ang) = camera_pose(spec, robot_xy, yaw, floor_z)
+            if spec.avoid_walls:
+                origin, udir, length = wall_ray(spec, robot_xy, yaw, floor_z)
+                try:
+                    hit = _nearest_wall_hit(origin, udir, length)
+                except Exception as e:            # 射線壞了不中斷錄影，但要講
+                    hit = None
+                    if not self._ray_warned:
+                        print(f"[camera] ⚠ 避牆射線失敗，{spec.name} 不避牆：{e!r}",
+                              flush=True)
+                        self._ray_warned = True
+                target = pull_fraction(length, hit)
+                f = smooth_pull(self._pull.get(spec.name, 1.0), target)
+                self._pull[spec.name] = f
+                if f < 0.999:
+                    self.pulled_frames[spec.name] = self.pulled_frames.get(spec.name, 0) + 1
+                    eye = pulled_eye(origin, udir, length, f)
+                    tx, ty, tz = _apply(spec.target_offset, yaw, spec.target_follow_yaw)
+                    axis, ang = look_at_rotation(
+                        eye, (robot_xy[0] + tx, robot_xy[1] + ty, floor_z + tz))
             m = Gf.Matrix4d(1.0).SetRotate(
                 Gf.Rotation(Gf.Vec3d(*axis), ang))
             m = m * Gf.Matrix4d(1.0).SetTranslate(Gf.Vec3d(*eye))
