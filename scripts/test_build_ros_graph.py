@@ -537,3 +537,21 @@ def test_prop_yaw_follows_the_map_to_world_rotation():
     yaw_world = math.atan2(ax[1], ax[0])
     expect = S.map_to_world(0.0, 0.0, math.radians(yaw_map))[2]
     assert math.cos(yaw_world - expect) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_character_bodies_sit_on_their_root(stage: Usd.Stage):
+    """★★ 2026-09-24「白色警察像鬼影快速穿梭」：原始場景 Character_04 的內層
+    ManRoot 被移開 5.3 m，身體跟著朝向繞根節點轉、碰撞體也在那裡。
+    角色根節點以下不可有任何非零 translate。"""
+    root = stage.GetPrimAtPath(B.CHARACTER_ROOT)
+    bad = []
+    for ch in root.GetChildren():
+        for prim in Usd.PrimRange(ch, Usd.PrimAllPrimsPredicate):
+            if prim == ch:
+                continue
+            a = prim.GetAttribute("xformOp:translate")
+            if a and a.HasAuthoredValue():
+                v = a.Get()
+                if v is not None and any(abs(c) > 1e-6 for c in v):
+                    bad.append((str(prim.GetPath()), tuple(v)))
+    assert not bad, bad

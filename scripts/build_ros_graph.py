@@ -788,6 +788,43 @@ def place_map_patch(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Change]:
                    f"體素 {VOXEL_M} m  z∈[{zl},{zh})  隱形＋靜態碰撞體")]
 
 
+def zero_character_inner_offsets(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Change]:
+    """把角色**內層**被移動過的位移歸零，讓身體就在我們驅動的根節點上。
+
+    ⚠⚠ 2026-09-24 使用者回報錄影裡有個白色警察「像鬼影在場景裡快速穿梭」。
+    原始場景的 Character_04 內層 ``female_adult_police_02/ManRoot`` 被寫了
+    translate (-4.82, -2.19, 0)，身體離根節點 5.3 m。我們（ORCA、站立擺位、
+    停放）驅動的都是根節點，所以：
+
+    * 身體畫在離指定位置 5.3 m 的地方，而且**跟著朝向繞根節點轉** ——
+      朝向轉 0.42 rad，身體就橫移約 2 m（錄影裡的「瞬移」）
+    * 身體的逐部位碰撞體也在那裡：光達看到、擦撞偵測撞到的都是這個分身，
+      ORCA 卻以為人在 5 m 外（sa4r2/sa4r3 c27 mixed run4 的
+      「撞到 Character_04」就是它）
+
+    只有 Character_04 有這個位移（整棵 /World/Characters 掃過）。這裡通用處理：
+    根節點以下任何非零 translate 一律歸零，以後換場景也不會再中招。
+    """
+    changes: list[Change] = []
+    root = stage.GetPrimAtPath(CHARACTER_ROOT)
+    if not (root and root.IsValid()):
+        return changes
+    for ch in root.GetChildren():
+        for prim in Usd.PrimRange(ch, Usd.PrimAllPrimsPredicate):
+            if prim == ch:
+                continue
+            attr = prim.GetAttribute("xformOp:translate")
+            if not (attr and attr.HasAuthoredValue()):
+                continue
+            v = attr.Get()
+            if v is None or all(abs(c) < 1e-6 for c in v):
+                continue
+            attr.Set(Gf.Vec3d(0.0, 0.0, 0.0))
+            changes.append(Change(str(prim.GetPath()), "xformOp:translate",
+                                  tuple(round(c, 3) for c in v), (0.0, 0.0, 0.0)))
+    return changes
+
+
 STEPS = (
     ("停用 Isaac 的 TF 發佈（方案 A）", disable_isaac_tf_publishers),
     ("odom topic 改 /odom_gt 讓 injector 插入", retarget_odometry_topic),
@@ -799,6 +836,7 @@ STEPS = (
     ("velodyne 物理關節對齊 URDF（執行期生效）", align_sensor_joint_to_urdf),
     ("NavFloor 抬高對齊走廊地板", align_navmesh_floor_to_corridor),
     ("停用無資料的 2D 光達", disable_broken_2d_lidars),
+    ("角色內層位移歸零（身體對齊根節點）", zero_character_inner_offsets),
     ("走廊障礙物", place_corridor_obstacles),
     ("地圖補丁（天花板層）", place_map_patch),
     ("新增 /clock 發佈", add_clock_publisher),

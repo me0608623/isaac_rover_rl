@@ -160,6 +160,20 @@ over "World"
         double3 xformOp:translate = (-4, 19, -0.4233022191647538)
     }
 
+    over "Characters"
+    {
+        over "Character_04"
+        {
+            over "female_adult_police_02"
+            {
+                over "ManRoot"
+                {
+                    double3 xformOp:translate = (0, 0, 0)
+                }
+            }
+        }
+    }
+
     def Xform "SimObstacles"
     {
         def Cylinder "pair_c27_1_0" (
