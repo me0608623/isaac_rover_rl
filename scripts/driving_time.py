@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+"""重算每一段的**實際行駛時間**（2026-09-24）。
+
+⚠ 原本以為是「routing 偶爾要 ~55 s 才給路徑」—— **錯**。查證後：routing 6 ms 就回、
+車 1 s 內開動。真正原因是 monitor_navigation 用模擬時間計時，節點剛建好還沒收到
+/clock 時 now() = 0，第一段的 t0 被記成 0，「耗時」多算了開跑前的整段模擬時間
+（~55~62 s）。72 趟裡 27 趟的去程中招，已在 monitor_navigation 修正（2c8f33a）。
+
+逐時刻記錄 nav/<tag>_leg?_*.csv 的第一筆是車開始收到 policy 指令的時刻、最後一筆
+是抵達那一刻，所以：
+
+    實際行駛時間 = csv 最後一筆的 t（t 已從第一筆歸零，模擬秒）
+    計時誤差     = 原耗時 − 實際行駛時間
+
+用法：python3 scripts/driving_time.py recordings > reports/driving_time.md
 """重算每一段的**實際行駛時間**，扣掉等 routing 給路徑的時間（2026-09-24）。
 
 為什麼要重算：monitor_navigation 的「耗時」從送出 routing 請求起算，但
@@ -10,6 +24,20 @@ routing_to_path 偶爾要 ~55 s 才發 /global_path，車停在原地等 —— 
 
     實際行駛時間 = csv 最後一筆的 t（t 已從第一筆歸零，模擬秒）
     等待路徑時間 = 原耗時 − 實際行駛時間
+
+用法：python3 scripts/driving_time.py recordings > reports/driving_time.md
+"""重算每一段的**實際行駛時間**（2026-09-24）。
+
+⚠ 原本以為是「routing 偶爾要 ~55 s 才給路徑」—— **錯**。查證後：routing 6 ms 就回、
+車 1 s 內開動。真正原因是 monitor_navigation 用模擬時間計時，節點剛建好還沒收到
+/clock 時 now() = 0，第一段的 t0 被記成 0，「耗時」多算了開跑前的整段模擬時間
+（~55~62 s）。72 趟裡 27 趟的去程中招，已在 monitor_navigation 修正（2c8f33a）。
+
+逐時刻記錄 nav/<tag>_leg?_*.csv 的第一筆是車開始收到 policy 指令的時刻、最後一筆
+是抵達那一刻，所以：
+
+    實際行駛時間 = csv 最後一筆的 t（t 已從第一筆歸零，模擬秒）
+    計時誤差     = 原耗時 − 實際行駛時間
 
 用法：python3 scripts/driving_time.py recordings > reports/driving_time.md
 """
@@ -31,7 +59,35 @@ _ROW = re.compile(r"^(c\d+)→(c\d+)\s+(OK|FAIL)\s+([\d.]+)s\s+([\d.]+)m", re.M)
 
 
 def legs_of(run_dir: Path):
-    """回傳 ``[(段名, ok, 原耗時, 路徑m, 行駛秒)]``。"""
+    """重算每一段的**實際行駛時間**（2026-09-24）。
+
+⚠ 原本以為是「routing 偶爾要 ~55 s 才給路徑」—— **錯**。查證後：routing 6 ms 就回、
+車 1 s 內開動。真正原因是 monitor_navigation 用模擬時間計時，節點剛建好還沒收到
+/clock 時 now() = 0，第一段的 t0 被記成 0，「耗時」多算了開跑前的整段模擬時間
+（~55~62 s）。72 趟裡 27 趟的去程中招，已在 monitor_navigation 修正（2c8f33a）。
+
+逐時刻記錄 nav/<tag>_leg?_*.csv 的第一筆是車開始收到 policy 指令的時刻、最後一筆
+是抵達那一刻，所以：
+
+    實際行駛時間 = csv 最後一筆的 t（t 已從第一筆歸零，模擬秒）
+    計時誤差     = 原耗時 − 實際行駛時間
+
+用法：python3 scripts/driving_time.py recordings > reports/driving_time.md
+"""回傳 ``[(段名, ok, 原耗時, 路徑m, 行駛秒)]``。"""重算每一段的**實際行駛時間**（2026-09-24）。
+
+⚠ 原本以為是「routing 偶爾要 ~55 s 才給路徑」—— **錯**。查證後：routing 6 ms 就回、
+車 1 s 內開動。真正原因是 monitor_navigation 用模擬時間計時，節點剛建好還沒收到
+/clock 時 now() = 0，第一段的 t0 被記成 0，「耗時」多算了開跑前的整段模擬時間
+（~55~62 s）。72 趟裡 27 趟的去程中招，已在 monitor_navigation 修正（2c8f33a）。
+
+逐時刻記錄 nav/<tag>_leg?_*.csv 的第一筆是車開始收到 policy 指令的時刻、最後一筆
+是抵達那一刻，所以：
+
+    實際行駛時間 = csv 最後一筆的 t（t 已從第一筆歸零，模擬秒）
+    計時誤差     = 原耗時 − 實際行駛時間
+
+用法：python3 scripts/driving_time.py recordings > reports/driving_time.md
+"""
     nav = (run_dir / "nav.log").read_text(errors="replace")
     rows = _ROW.findall(nav)
     out = []
@@ -65,14 +121,15 @@ def main() -> int:
         w.writerows(per_run)
 
     P = print
-    P("# 實際行駛時間（扣掉等路徑）\n")
+    P("# 實際行駛時間（修正計時錯誤）\n")
     P(f"共 {len(per_run)} 段（{len(per_run)//2} 趟 × 去回）。逐段明細：`{out_csv}`。\n")
     waits = [r["wait"] for r in per_run if r["wait"] is not None]
     long_w = [r for r in per_run if r["wait"] is not None and r["wait"] > 10]
-    P(f"- 等路徑超過 10 s 的段：**{len(long_w)} / {len(per_run)}**，"
+    P(f"- 原耗時多算超過 10 s 的段：**{len(long_w)} / {len(per_run)}**，"
       f"全部是{'去程' if all(r['leg']=='去' for r in long_w) else '去程與回程'}；"
-      f"這些段平均等 {sum(r['wait'] for r in long_w)/max(1,len(long_w)):.1f} s")
-    P(f"- 其餘段等待中位 {sorted(waits)[len(waits)//2]:.1f} s（送出請求到開始動的正常延遲）\n")
+      f"平均多算 {sum(r['wait'] for r in long_w)/max(1,len(long_w)):.1f} s。"
+      f"原因是監控程式第一段計時起點被讀成 0（還沒收到模擬時鐘），車並沒有停著等；已修正")
+    P(f"- 其餘段差距中位 {sorted(waits)[len(waits)//2]:.1f} s\n")
 
     groups = defaultdict(list)
     for r in per_run:
@@ -93,7 +150,7 @@ def main() -> int:
                   f"{mean([r['total'] for r in bk]):.1f} | "
                   f"{mean([r['dist'] for r in go + bk]):.1f} |")
         P("")
-    P("每格是 4 趟的平均。「原耗時」含等路徑，**論文請用「行駛」欄**。")
+    P("每格是 4 趟的平均。「原耗時」有 27 段去程被多算，**論文請用「行駛」欄**。")
     return 0
 
 
