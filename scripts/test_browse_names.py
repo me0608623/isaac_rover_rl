@@ -15,7 +15,8 @@ def test_every_scenario_and_camera_has_a_chinese_name():
     from sim_cameras import CAMERAS
 
     assert set(SCENARIO_ZH) == set(SCENARIO_NAMES)
-    assert set(CAMERA_ZH) == {c.name for c in CAMERAS}
+    # 每台錄影相機都要有中文名；另外多一個合成畫面（make_combined）
+    assert set(CAMERA_ZH) == {c.name for c in CAMERAS} | {"combined"}
 
 
 def test_static_run_is_not_labelled_orca():

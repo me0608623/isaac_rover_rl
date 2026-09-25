@@ -37,6 +37,8 @@ CAMERA_ZH = {
     "topdown": "俯視",
     "chase": "車後",
     "oblique": "斜前方",
+    # 2026-09-25：三視角＋資訊欄合成一個畫面（scripts/make_combined.py）
+    "combined": "三視角合成",
 }
 
 #: 行人的走法。`orca` = RVO2 互動避讓（會閃避彼此與車）；`path` = 沿固定路線來回。
