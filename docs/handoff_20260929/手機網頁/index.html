@@ -1,0 +1,193 @@
+<title>走廊導航錄影精選</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;600;800&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+:root{
+  --bg:#eef1f0; --ink:#17201d; --muted:#5b6964; --line:#cdd6d2; --card:#fbfcfb;
+  --accent:#0f7a63; --warn:#b5561a; --chip:#dfe8e4; --wall:#d8cbb4;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#111615; --ink:#e3ebe8; --muted:#93a39d; --line:#27312e; --card:#182020;
+    --accent:#3cc29f; --warn:#e8924f; --chip:#22302c; --wall:#4a4236; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#111615; --ink:#e3ebe8; --muted:#93a39d; --line:#27312e; --card:#182020;
+  --accent:#3cc29f; --warn:#e8924f; --chip:#22302c; --wall:#4a4236; color-scheme:dark;
+}
+body{background:var(--bg);color:var(--ink);font-family:"Noto Sans TC",system-ui,sans-serif;
+  padding-inline:16px;padding-block:20px 48px;line-height:1.6}
+.wrap{max-width:980px;margin:0 auto;display:grid;gap:22px}
+h1{font-size:1.6rem;font-weight:800;margin:0;text-wrap:balance}
+.lede{color:var(--muted);margin:4px 0 0;max-width:62ch}
+.legend{display:flex;flex-wrap:wrap;gap:8px;font-size:.82rem}
+.legend span{background:var(--chip);border-radius:4px;padding:2px 8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,440px),1fr));gap:18px}
+figure{margin:0;background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+video{display:block;width:100%;max-width:100%;aspect-ratio:16/9;background:#000}
+figcaption{padding:12px 14px 14px;display:grid;gap:4px}
+.t{font-weight:600}
+.meta{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.78rem;color:var(--muted)}
+.note{font-size:.86rem;color:var(--muted)}
+.note b{color:var(--warn);font-weight:600}
+.ok{color:var(--accent);font-weight:600}
+h2{font-size:1.15rem;margin:0 0 10px;font-weight:800}
+.cam{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding-block:16px}
+.camgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:18px;align-items:start}
+.cam video{aspect-ratio:auto}
+.how{display:grid;gap:10px}
+.how svg{width:100%;max-width:420px;height:auto;border:1px solid var(--line);border-radius:8px}
+.how ol{margin:0;padding-left:1.3em;display:grid;gap:4px;font-size:.92rem}
+.upd{display:block;margin-top:6px;color:var(--accent);font-weight:600}
+.dt .tw{overflow-x:auto;margin-top:10px}
+table{border-collapse:collapse;width:100%;font-size:.88rem;font-variant-numeric:tabular-nums}
+caption{text-align:left;font-weight:600;padding:4px 0}
+th,td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:right}
+th:nth-child(-n+2),td:nth-child(-n+2){text-align:left}
+footer{font-size:.8rem;color:var(--muted);border-top:1px solid var(--line);padding-top:12px}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>走廊導航錄影精選</h1>
+    <p class="lede">Isaac Sim 3F 走廊，實車同一套 ROS（NDT 定位 + routing + RL policy），速度 0.7、ORCA 行人。
+      72 趟全部來回抵達、真的碰到 0 次，這裡挑 6 段最有看頭的（原檔在 PC 上，已壓縮成手機用）。
+      <span class="upd">9/24 晚間更新：已修正 Character_04（白色警察）鬼影、斜前方鏡頭穿牆、行人快停下時突然轉身 180°、車後鏡頭在轉角貼牆（改成往走廊中間橫移）。影片都是最新版本。</span></p>
+  </header>
+
+  <section class="combo">
+    <h2>三視角合成</h2>
+    <figure>
+      <video controls playsinline preload="metadata" src="v/sa4r2_c27_mixed4_combined.mp4"></video>
+      <figcaption>
+        <div class="t">sa4r2｜路線A｜混合 第4趟（最擠）</div>
+        <div class="note">左上俯視、右上車後、左下斜前方、右下是這趟的資訊（場上數量、行駛時間、碰撞）。72 趟都有同樣的合成版，在 PC 上各情境資料夾裡，檔名結尾是「三視角合成」。</div>
+      </figcaption>
+    </figure>
+  </section>
+
+  <section class="cam">
+    <h2>斜前方鏡頭怎麼避牆</h2>
+    <div class="camgrid">
+      <figure>
+        <video controls playsinline preload="metadata" src="v/compare_oblique.mp4"></video>
+        <figcaption>
+          <div class="t">修正前 vs 修正後（sa4r2｜路線B｜混合 第2趟，第 29–38 秒）</div>
+          <div class="note">第 5–6 秒車靠近牆：上面整片白牆；中間鏡頭拉近、車還在畫面裡。下面是同一時間的俯視。</div>
+        </figcaption>
+      </figure>
+      <div class="how">
+        <svg viewBox="0 0 320 230" role="img" aria-label="鏡頭避牆示意圖">
+          <rect x="0" y="0" width="320" height="230" fill="var(--card)"/>
+          <rect x="228" y="0" width="92" height="230" fill="var(--wall)"/>
+          <text x="274" y="120" text-anchor="middle" font-size="13" fill="var(--muted)">牆</text>
+          <rect x="52" y="150" width="34" height="46" rx="4" fill="var(--ink)"/>
+          <text x="69" y="215" text-anchor="middle" font-size="12" fill="var(--muted)">車</text>
+          <line x1="69" y1="160" x2="268" y2="40" stroke="var(--muted)" stroke-width="2" stroke-dasharray="5 5"/>
+          <circle cx="268" cy="40" r="8" fill="none" stroke="var(--warn)" stroke-width="3"/>
+          <text x="262" y="24" text-anchor="end" font-size="12" fill="var(--warn)">原本的位置（在牆裡）</text>
+          <circle cx="228" cy="64" r="4" fill="var(--warn)"/>
+          <text x="222" y="84" text-anchor="end" font-size="11" fill="var(--muted)">射線碰到牆</text>
+          <circle cx="205" cy="78" r="9" fill="var(--accent)"/>
+          <text x="196" y="104" text-anchor="end" font-size="12" fill="var(--accent)">拉到牆前 0.3 m</text>
+        </svg>
+        <ol>
+          <li>每一幀從車往「預定的鏡頭位置」（車前 3.2 m、左 1.4 m、高 1.7 m）拉一條線。</li>
+          <li>線碰到牆，就把鏡頭停在牆前 0.3 m；沒碰到就維持原位。</li>
+          <li>「牆」用兩種資料判斷，取較近的：物理碰撞體，以及<b>畫面上看得到的建築網格</b>（有些門和內凹處只有外觀、沒有碰撞體，只看碰撞體會漏掉）。</li>
+          <li>拉近立刻生效（任何一幀都不進牆），放回原位慢慢來（約 1 秒），畫面不會抽動。</li>
+        </ol>
+        <div class="note">效果：同一趟的全黑／全白幀 172 → 6。剩下的是行人剛好穿過鏡頭，不是牆（避牆刻意不看行人，否則鏡頭會一直抖）。車後鏡頭也用同一套，另外會量左右離牆距離、往走廊中間橫移（最多 0.8 m），轉角時不會被牆角擋住一半。</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="legend">
+    <span>路線A：c28 ⇄ c27（主路線）</span>
+    <span>路線B：c28 ⇄ c36（延伸）</span>
+    <span>靜 = 靜止障礙＋站著的人</span>
+    <span>動 = 走動行人</span>
+  </div>
+
+  <div class="grid">
+    <figure>
+      <video controls playsinline preload="metadata" src="v/sa4r2_c27_mixed4_top.mp4"></video>
+      <figcaption>
+        <div class="t">sa4r2｜路線A｜混合 第4趟（最擠）｜俯視</div>
+        <div class="meta">靜6 動8 · 行駛 去 29.9s / 回 42.2s · 路徑 20.6 / 22.7 m</div>
+        <div class="note"><span class="ok">來回抵達，0 碰撞</span>。原本的「碰到 Character_04」是它身體偏移造成，修正後已消失。</div>
+      </figcaption>
+    </figure>
+    <figure>
+      <video controls playsinline preload="metadata" src="v/sa4r3_c27_mixed4_top.mp4"></video>
+      <figcaption>
+        <div class="t">sa4r3｜路線A｜混合 第4趟｜俯視</div>
+        <div class="meta">靜6 動8 · 行駛 去 34.8s / 回 52.8s · 回程繞 27.8 m</div>
+        <div class="note"><span class="ok">來回抵達，0 碰撞</span>。回程閃人繞得比較遠。</div>
+      </figcaption>
+    </figure>
+    <figure>
+      <video controls playsinline preload="metadata" src="v/sa5r2_c27_mixed4_top.mp4"></video>
+      <figcaption>
+        <div class="t">sa5r2｜路線A｜混合 第4趟｜俯視</div>
+        <div class="meta">靜6 動8 · 行駛 去 54.1s / 回 33.3s</div>
+        <div class="note"><span class="ok">來回抵達，0 碰撞</span>。三個模型同一場景可以對照看。</div>
+      </figcaption>
+    </figure>
+    <figure>
+      <video controls playsinline preload="metadata" src="v/sa5r2_c27_static4_top.mp4"></video>
+      <figcaption>
+        <div class="t">sa5r2｜路線A｜純靜態 第4趟｜俯視</div>
+        <div class="meta">靜8 動0 · 行駛 去 73.4s / 27.9 m · 回 69.8s / 25.5 m</div>
+        <div class="note"><span class="ok">來回抵達，0 碰撞</span>，但繞路明顯（一般約 17 m）。之前卡死的就是這個配置。</div>
+      </figcaption>
+    </figure>
+    <figure>
+      <video controls playsinline preload="metadata" src="v/sa4r2_c36_dynamic4_top.mp4"></video>
+      <figcaption>
+        <div class="t">sa4r2｜路線B｜動態 第4趟｜俯視</div>
+        <div class="meta">靜0 動8 · 行駛 去 29.8s / 回 35.2s</div>
+        <div class="note"><span class="ok">來回抵達，0 碰撞</span>。較長路線、只有走動行人。</div>
+      </figcaption>
+    </figure>
+    <figure>
+      <video controls playsinline preload="metadata" src="v/sa4r2_c27_mixed4_chase.mp4"></video>
+      <figcaption>
+        <div class="t">sa4r2｜路線A｜混合 第4趟｜車後視角</div>
+        <div class="meta">同第一段，換成跟車鏡頭</div>
+        <div class="note">看車子怎麼閃行人最清楚。</div>
+      </figcaption>
+    </figure>
+  </div>
+
+<section class="dt"><h2>實際行駛時間（秒）</h2>
+<p class="note">原本的「耗時」有 27 段去程多算約 59 s：監控程式第一段的計時起點被讀成 0（還沒收到模擬時鐘），車其實 1 秒內就開動。這裡是修正後的實際行駛時間，每格 4 趟平均。</p>
+<div class="tw"><table><caption>路線A c28⇄c27</caption><thead><tr><th>模型</th><th>情境</th><th>去</th><th>回</th><th>路徑 m</th></tr></thead><tbody>
+<tr><td>sa4r2</td><td>純靜態</td><td>24.5</td><td>33.4</td><td>18.6</td></tr>
+<tr><td>sa4r2</td><td>動態</td><td>25.6</td><td>27.5</td><td>17.8</td></tr>
+<tr><td>sa4r2</td><td>混合</td><td>29.7</td><td>35.4</td><td>20.1</td></tr>
+<tr><td>sa4r3</td><td>純靜態</td><td>27.9</td><td>28.6</td><td>18.0</td></tr>
+<tr><td>sa4r3</td><td>動態</td><td>26.9</td><td>27.8</td><td>18.3</td></tr>
+<tr><td>sa4r3</td><td>混合</td><td>28.6</td><td>37.3</td><td>20.4</td></tr>
+<tr><td>sa5r2</td><td>純靜態</td><td>37.5</td><td>44.2</td><td>20.3</td></tr>
+<tr><td>sa5r2</td><td>動態</td><td>33.2</td><td>41.5</td><td>21.3</td></tr>
+<tr><td>sa5r2</td><td>混合</td><td>52.3</td><td>39.1</td><td>22.8</td></tr>
+</tbody></table></div>
+<div class="tw"><table><caption>路線B c28⇄c36</caption><thead><tr><th>模型</th><th>情境</th><th>去</th><th>回</th><th>路徑 m</th></tr></thead><tbody>
+<tr><td>sa4r2</td><td>純靜態</td><td>30.1</td><td>32.9</td><td>21.7</td></tr>
+<tr><td>sa4r2</td><td>動態</td><td>29.2</td><td>33.5</td><td>21.5</td></tr>
+<tr><td>sa4r2</td><td>混合</td><td>31.4</td><td>37.5</td><td>23.0</td></tr>
+<tr><td>sa4r3</td><td>純靜態</td><td>29.9</td><td>31.7</td><td>21.2</td></tr>
+<tr><td>sa4r3</td><td>動態</td><td>29.8</td><td>34.0</td><td>22.0</td></tr>
+<tr><td>sa4r3</td><td>混合</td><td>30.7</td><td>38.9</td><td>22.6</td></tr>
+<tr><td>sa5r2</td><td>純靜態</td><td>31.0</td><td>42.7</td><td>21.9</td></tr>
+<tr><td>sa5r2</td><td>動態</td><td>33.6</td><td>42.5</td><td>22.5</td></tr>
+<tr><td>sa5r2</td><td>混合</td><td>34.0</td><td>53.4</td><td>25.5</td></tr>
+</tbody></table></div>
+</section>
+
+  <footer>
+    影片下方的秒數都是修正後的「行駛時間」。
+    全部 216 段原檔：PC 上 <code>sim_ws/recordings/00_影片總覽/</code>。
+  </footer>
+</div>
