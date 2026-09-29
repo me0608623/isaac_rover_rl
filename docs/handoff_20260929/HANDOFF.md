@@ -31,15 +31,17 @@
 - 已修：Character_04 身體偏移、鏡頭穿牆（斜前方拉近、車後橫移）、行人轉身平滑、計時 /clock 競態、dynamic 停用角色崩潰
 - 最新 commit：`a112bf5`（三視角合成加即時線速度／角速度曲線）
 
-## 4. 進行中（2026-09-29 14:05）
+## 4. 進行中（2026-09-29 14:45 更新）
 
 | 工作 | 狀態 | 接手要做的事 |
 |---|---|---|
-| 重新產生 72 支三視角合成（含速度曲線） | 背景執行中，`make_combined.py` | 完成後跑 `python3 scripts/make_browse_tree.py`，再跑 `python3 scripts/check_recordings.py recordings > reports/recordings_health.txt` |
-| 傳影片到 Windows | scp 背景執行中 | 目標：`aa@192.168.0.62:C:/Users/aa/Documents/論文撰寫/video/isaacsim 走廊模擬/`（**不是 192.168.3.105**，那台登不進去）。傳完後要把**新版** `*三視角合成.mp4` 再傳一次蓋掉舊版 |
-| 傳說明文件 | 未傳（只傳了 `00_先看這裡.md`） | 傳 `論文素材包/` 裡的 `01_模擬作法.md`、`02_如何寫進論文.md`、`結果/`、`場景/`；`結果/recordings_health.txt` 要換成新版健檢 |
-| 驗收 | 未做 | 兩端檔案數與大小比對（Windows 用 `Get-FileHash -Algorithm MD5` 抽查） |
-| 手機網頁 | 已發佈 v5 | `https://claude.ai/artifact/AnzgFRkfq8xcMQRUqgyid9`；原始檔 `手機網頁/index.html`，影片在 `手機網頁/v/`。新版合成影片出來後可換 `v/sa4r2_c27_mixed4_combined.mp4` 再發佈 |
+| 三視角合成（含速度曲線）72 支 | ✅ 完成，已傳到 Windows 並以大小比對 72/72 一致 | — |
+| 影片到 Windows | ✅ 288 支都在 `…\isaacsim 走廊模擬\影片\` | — |
+| 說明文件 | ⛔ **暫停**：只傳了 `00_先看這裡.md`（舊版） | 等使用者同意後，傳 `論文素材包/` 的 00~03、`結果/`、`場景/`（共約 1 MB） |
+| 手機網頁 | 已發佈 v5 | 可換新版 `v/sa4r2_c27_mixed4_combined.mp4` 再發佈 |
+
+⚠⚠ **傳到 Windows 會算進學校每日 15 GB 流量**（雖然走內網）。09-29 傳 17 GB 已讓 140.124.42.62 被封到隔天 6 點。
+任何大檔傳輸前先問使用者（見記憶 `feedback_lan_transfer_counts_campus_quota.md`）。
 
 ## 4.5 下一個任務（使用者指定）
 
