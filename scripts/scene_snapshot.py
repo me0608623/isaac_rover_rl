@@ -28,7 +28,8 @@ READABLE_VERSIONS = (1, 2)
 
 
 def build_snapshot(scenario: str, run_index: int, obstacles, characters,
-                   walks=(), standing_yaw=None, route: str = "") -> dict:
+                   walks=(), standing_yaw=None, route: str = "",
+                   density: str | None = None) -> dict:
     """``obstacles``：啟用中的 Obstacle；
     ``characters``：``(名字, map_x, map_y, 會不會走)``；
     ``walks``：會走的人的 CharacterWalk（回放建步態要用）；
@@ -39,6 +40,7 @@ def build_snapshot(scenario: str, run_index: int, obstacles, characters,
         "scenario": scenario,
         "run_index": int(run_index),
         "route": route,
+        "density": density,
         "obstacles": [asdict(o) for o in obstacles],
         "characters": [
             {"name": n, "map_x": round(float(x), 4), "map_y": round(float(y), 4),

@@ -7,7 +7,8 @@ import math
 import pytest
 
 from collision_log import (BODY_BOX_CENTRE, BODY_BOX_HALF, CONTROL_AT_STEP,
-                           FLOOR_LIFT_M, FLUSH_EVERY_S, EpisodeTracker,
+                           CLEARANCE_MAX_M, CLEARANCE_RESOLUTION_M,
+                           FLOOR_LIFT_M, FLUSH_EVERY_S, CollisionLogger, EpisodeTracker,
                            body_box_world, classify_hit, is_self,
                            merged_events, summarise)
 
@@ -159,3 +160,44 @@ def test_contact_reports_are_not_used():
     src = inspect.getsource(collision_log)
     assert "subscribe_contact_report_events(" not in src
     assert "PhysxContactReportAPI.Apply" not in src
+
+
+def test_truth_clearance_binary_search_uses_geometry_hits():
+    """淨空來自 PhysX 重疊幾何，並在宣告的解析度內找到首次接觸 margin。"""
+    log = CollisionLogger.__new__(CollisionLogger)
+    log._clearance_best = CLEARANCE_MAX_M
+    log._clearance_seen = False
+    log._clearance_samples = 0
+    log._clearance_categories = []
+    log._walking = frozenset()
+    log._clearance_hits = lambda _c, _q, margin: (
+        ["/World/SimObstacles/prop_s1_0/Collider"] if margin >= 0.37 else [])
+    log._sample_clearance((0, 0, 0), (0, 0, 0, 1))
+    assert log._clearance_seen is True
+    assert 0.37 <= log._clearance_best <= 0.37 + CLEARANCE_RESOLUTION_M
+    assert log._clearance_categories == ["道具"]
+    assert log._clearance_summary()["geometry_truth"] is True
+
+
+def test_truth_clearance_reports_lower_bound_instead_of_fake_value():
+    log = CollisionLogger.__new__(CollisionLogger)
+    log._clearance_best = CLEARANCE_MAX_M
+    log._clearance_seen = False
+    log._clearance_samples = 0
+    log._clearance_categories = []
+    log._walking = frozenset()
+    log._clearance_hits = lambda *_args: []
+    log._sample_clearance((0, 0, 0), (0, 0, 0, 1))
+    summary = log._clearance_summary()
+    assert summary["min_m"] is None
+    assert summary["lower_bound_m"] == CLEARANCE_MAX_M
+    assert summary["complete"] is True
+
+
+def test_clearance_query_excludes_self_and_nav_floor():
+    log = CollisionLogger.__new__(CollisionLogger)
+    log._query = lambda *_args: [
+        f"{R}/base_link/collisions/mesh_0", "/World/NavFloor_H",
+        "/World/Characters/Character_10/parts/torso"]
+    assert log._clearance_hits((0, 0, 0), (0, 0, 0, 1), 0.2) == [
+        "/World/Characters/Character_10/parts/torso"]

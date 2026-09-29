@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from record_plan import build_plan, CAMERAS_IN_PLAN, DEFAULT_MODELS, run_tag
+from record_plan import (build_plan, build_stress_plan, CAMERAS_IN_PLAN,
+                         DEFAULT_MODELS, run_tag)
 
 
 def test_plan_covers_every_route_model_scenario_and_run():
@@ -118,3 +119,38 @@ def test_runs_are_numbered_from_one():
 def test_rejects_nonpositive_runs():
     with pytest.raises(ValueError):
         build_plan(runs_per_scenario=0, root="/tmp/rec")
+
+
+def test_stress_plan_has_three_independent_density_levels():
+    plan = build_stress_plan(4, "/tmp/recordings_stress", routes=("c27",))
+    assert len(plan) == 3 * 3 * 3 * 4       # 模型 × 密度 × 情境 × 重複
+    assert {r.density for r in plan} == {"S1", "S2", "S3"}
+    assert {r.run_index for r in plan} == {1, 2, 3, 4}
+    assert len({r.tag for r in plan}) == len(plan)
+    assert run_tag("sa4r2", "c27", "mixed", 1, "S1") == \
+        "sa4r2_c27_mixed_s1_run01"
+
+
+def test_stress_plan_rejects_unknown_or_duplicate_density():
+    with pytest.raises(ValueError):
+        build_stress_plan(4, "/tmp/stress", densities=("S4",))
+    with pytest.raises(ValueError):
+        build_stress_plan(4, "/tmp/stress", densities=("S1", "s1"))
+
+
+def test_formal_plan_tags_remain_byte_for_byte_compatible():
+    row = build_plan(1, "/tmp/recordings", models=("sa4r2",), routes=("c27",))[0]
+    assert row.density is None
+    assert row.tag == "sa4r2_c27_static_run01"
+
+
+def test_batch_script_isolated_stress_contract():
+    """壓力模式必須分流、先 preflight，並把 density 寫進 CLI 與 metadata。"""
+    from pathlib import Path
+
+    text = (Path(__file__).parent / "record_batch.sh").read_text()
+    assert "recordings_stress" in text
+    assert 'realpath -m "$ROOT"' in text
+    assert "preflight_density_variants" in text
+    assert "--density" in text
+    assert '"density": sys.argv[11] or None' in text

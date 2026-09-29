@@ -64,6 +64,10 @@ def main() -> int:
                     help="場景變體編號（1 起算）。>0 時障礙與行人的**數量與位置**"
                          "依 scene_variants.variant() 決定，每一趟都不一樣、"
                          "且數量依序更多。0=沿用 ros_graph_spec 的固定預設場景。")
+    ap.add_argument("--density", choices=("S1", "S2", "S3"), default="",
+                    help="壓力測試密度等級。空字串（預設）維持正式 run1~run4；"
+                         "S1/S2/S3 使用壓力測試的障礙與行人數量。必須搭配"
+                         "--run-index，該編號在壓力模式代表重複試驗編號。")
     ap.add_argument("--crowd-mode", choices=("orca", "path"), default="orca",
                     help="行人怎麼走：orca(預設)=用 RVO2 解 ORCA，會與車和彼此"
                          "互相閃避；path=沿固定折線等速往返（舊行為，不理會車）")
@@ -118,6 +122,9 @@ def main() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from scenarios import scenario_config
     scen = scenario_config(args.scenario)
+
+    if args.density and args.run_index < 1:
+        ap.error("--density 必須搭配 --run-index >= 1")
 
     if not args.usd.exists():
         print(f"[run_isaac_sim] 找不到 USD: {args.usd}", file=sys.stderr)
@@ -179,7 +186,8 @@ def main() -> int:
     _standing_yaw = {}           # 被 place_standing 擺位的站立人物朝向（給快照）
     if args.run_index >= 1:
         from scene_variants import variant as _variant
-        _sv = _variant(args.run_index, route=args.route or None)
+        _sv = _variant(args.run_index, route=args.route or None,
+                       density=args.density or None)
     _want = ({o.name for o in _sv.obstacles} if _sv is not None else None)
 
     # 情境：關掉靜態障礙就整個 prim 停用（SetActive(False) 會同時從算圖與
@@ -196,6 +204,7 @@ def main() -> int:
             _n_on += 1 if _on else 0
         print(f"[run_isaac_sim] 情境 {scen.name}"
               + (f"／路線 {args.route or '預設'}／變體 run{args.run_index}" if _sv else "")
+              + (f"／密度 {args.density}" if args.density else "")
               + f"：靜態障礙 {_n_on}/{_n_all} 啟用"
               f"　行人走動 {'開' if scen.walks_enabled else '關'}")
 
@@ -680,7 +689,8 @@ def main() -> int:
             _snap_p = write_snapshot(Path(args.pose_log).parent, build_snapshot(
                 scen.name, args.run_index, _on_obs, _chars9, walks=_walks9,
                 standing_yaw={n: y for n, y in _standing_yaw.items() if n in _active9},
-                route=args.route or _S9.DEFAULT_ROUTE))
+                route=args.route or _S9.DEFAULT_ROUTE,
+                density=args.density or None))
             print(f"[run_isaac_sim] 場景快照 → {_snap_p}"
                   f"（障礙 {len(_on_obs)}、角色 {len(_chars9)}，其中會走 "
                   f"{sum(1 for c in _chars9 if c[3])}）")

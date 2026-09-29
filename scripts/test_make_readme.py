@@ -122,3 +122,32 @@ def test_density_table_splits_the_two_routes():
     t = "\n".join(density_table(runs))
     assert "| c27 | 混合 | 靜6動8 |" in t
     assert "| c36 | 混合 | 靜5動8 |" in t
+
+
+def test_stress_density_table_does_not_mix_s1_and_s2_replicates():
+    from make_readme import density_table
+
+    runs = [
+        {"scenario": "mixed", "density": "S1", "run_index": 1,
+         "counts": (8, 12), "route_key": "c27"},
+        {"scenario": "mixed", "density": "S2", "run_index": 1,
+         "counts": (10, 16), "route_key": "c27"},
+    ]
+    text = "\n".join(density_table(runs))
+    assert "| c27 | S1 | 混合 | 靜8動12 |" in text
+    assert "| c27 | S2 | 混合 | 靜10動16 |" in text
+
+
+def test_stress_readme_reports_success_percentage_and_missing_clearance():
+    from make_readme import render_stress
+
+    base = {"model": "sa4r2", "route_key": "c27", "density": "S1",
+            "scenario": "mixed", "speed_rate": 0.7, "videos": [], "counts": (8, 12)}
+    runs = [dict(base, tag="ok", run_index=1,
+                 legs=[{"result": "OK"}, {"result": "OK"}]),
+            dict(base, tag="fail", run_index=2,
+                 legs=[{"result": "FAIL"}])]
+    text = render_stress(runs)
+    assert "1/2 | 50.0%" in text
+    assert "最小真值淨空" in text
+    assert "—（無真值欄位）" in text

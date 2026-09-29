@@ -598,3 +598,99 @@ def test_parked_walkers_are_walkers_and_leave_the_passage_open():
                 else:
                     assert math.dist((p.map_x, p.map_y), xy) >= r2 + 0.25 + 0.3 - 1e-6
             things.append(((sc, la), 0.25, (p.map_x, p.map_y)))
+
+
+# ── 2026-09-29：S1/S2/S3 壓力測試與 0.9 m 可通行 gate ───────────────
+
+STRESS_VARIANTS = [
+    (density, rk, run)
+    for density in ("S1", "S2", "S3")
+    for rk in _S_ROUTES.ROUTE_ORDER
+    for run in (1, 2, 3, 4)
+]
+
+
+def test_stress_density_counts_and_labels():
+    from scene_variants import DENSITY_LEVELS
+
+    for density, rk, run in STRESS_VARIANTS:
+        v = variant(run, route=rk, density=density)
+        spec = DENSITY_LEVELS[density]
+        assert v.density == density
+        assert len(v.obstacles) == spec.obstacle_count
+        assert len(v.walks) == spec.walker_count
+        assert all(f"_{density.lower()}_" in o.name for o in v.obstacles)
+
+
+def test_stress_replicates_are_deterministic_but_distinct():
+    for density in ("S1", "S2", "S3"):
+        for rk in _S_ROUTES.ROUTE_ORDER:
+            scenes = [variant(run, route=rk, density=density) for run in (1, 2, 3, 4)]
+            again = variant(1, route=rk, density=density)
+            assert scenes[0] == again
+            positions = [tuple((o.map_x, o.map_y) for o in v.obstacles) for v in scenes]
+            assert len(set(positions)) == 4
+
+
+def test_stress_character_pools_have_enough_unique_roles():
+    from scene_variants import DENSITY_LEVELS, STRESS_STANDING_POOL, WALKER_POOL
+
+    assert len(WALKER_POOL) >= DENSITY_LEVELS["S3"].walker_count
+    assert len(WALKER_POOL) == len(set(WALKER_POOL))
+    for density, rk, run in STRESS_VARIANTS:
+        v = variant(run, route=rk, density=density)
+        walkers = [w.name for w in v.walks]
+        standing = [p.name for p in v.standing]
+        assert len(walkers) == len(set(walkers))
+        assert len(standing) == len(set(standing))
+        assert not (set(walkers) & set(standing))
+        assert set(standing) <= set(STRESS_STANDING_POOL)
+        assert len(standing) == sum(o.kind == "person" for o in v.obstacles)
+
+
+def test_stress_walker_starts_are_separate_and_routes_are_long_enough():
+    from scene_variants import MIN_WALKER_START_GAP_M
+
+    for density, rk, run in STRESS_VARIANTS:
+        v = variant(run, route=rk, density=density)
+        starts = [w.waypoints[0] for w in v.walks]
+        for i, a in enumerate(starts):
+            assert math.dist(a, v.walks[i].waypoints[-1]) >= 2.5
+            for b in starts[i + 1:]:
+                assert math.dist(a, b) >= MIN_WALKER_START_GAP_M
+
+
+def test_all_stress_variants_have_a_0_9m_passage():
+    """每組在回傳前已強制 gate；這裡另以公開介面驗證完整 24 組。"""
+    from scene_variants import MIN_PASSAGE_WIDTH_M, variant_is_passable
+
+    assert MIN_PASSAGE_WIDTH_M == pytest.approx(0.9)
+    for density, rk, run in STRESS_VARIANTS:
+        v = variant(run, route=rk, density=density)
+        assert variant_is_passable(v, route=rk, include_parked=True), (density, rk, run)
+
+
+def test_density_none_preserves_baseline_contract_and_bad_name_fails():
+    for rk, run in ALL_VARIANTS:
+        assert variant(run, route=rk) == variant(run, route=rk, density=None)
+    with pytest.raises(ValueError, match="未知密度"):
+        variant(1, density="S4")
+
+
+def test_preflight_covers_every_density_route_and_replicate():
+    from scene_variants import preflight_density_variants
+
+    result = preflight_density_variants()
+    assert set(result) == set(STRESS_VARIANTS)
+    assert all(row["passage_width_m"] == pytest.approx(0.9)
+               for row in result.values())
+
+
+def test_usd_obstacle_union_can_include_all_stress_levels_without_name_collisions():
+    from scene_variants import DENSITY_LEVELS, all_variant_obstacles
+
+    obstacles = all_variant_obstacles(densities=tuple(DENSITY_LEVELS))
+    names = [o.name for o in obstacles]
+    # baseline: 2 routes × (3+4+5+6)；stress: 2 routes × 4 replicates × (8+10+12)
+    assert len(names) == 2 * sum(OBSTACLE_COUNTS) + 2 * 4 * (8 + 10 + 12)
+    assert len(names) == len(set(names))

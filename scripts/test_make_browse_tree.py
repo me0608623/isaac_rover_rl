@@ -266,3 +266,22 @@ def test_videos_are_grouped_by_model_route_scenario(tmp_path):
     from make_browse_tree import MODEL_INDEX_DIRNAME
     assert _mp4s(root / "模型sa4r2" / MODEL_INDEX_DIRNAME
                  / "路線B_c28往返c36_延伸到c36" / "1_純靜態_只有靜止障礙") == _mp4s(leaf)
+
+
+def test_stress_densities_get_separate_index_directories(tmp_path):
+    root = tmp_path / "recordings_stress"
+    (root / "模型sa4r2").mkdir(parents=True)
+    for density, counts in (("S1", (8, 12)), ("S2", (10, 16))):
+        d = _mk_run(root / "模型sa4r2", f"sa4r2_c27_mixed_{density.lower()}_run01",
+                    "mixed", 1, obstacles=counts[0], chars=counts[1],
+                    walking=counts[1], standing=0)
+        meta = json.loads((d / "run.json").read_text())
+        meta.update(route_key="c27", density=density)
+        (d / "run.json").write_text(json.dumps(meta))
+    build(root, {})
+    base = (root / BROWSE_DIRNAME / MAIN_DIRNAME / "模型sa4r2"
+            / "路線A_c28往返c27_主路線")
+    assert (base / "密度S1").is_dir()
+    assert (base / "密度S2").is_dir()
+    assert len(_mp4s(base / "密度S1")) == 3
+    assert len(_mp4s(base / "密度S2")) == 3

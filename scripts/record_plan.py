@@ -37,8 +37,13 @@ DEFAULT_MODELS: tuple[str, ...] = ("sa4r2", "sa4r3", "sa5r2")
 #: 三個視角，順序固定（與 sim_cameras.CAMERAS 對應）。
 CAMERAS_IN_PLAN: tuple[str, ...] = ("topdown", "chase", "oblique")
 
+#: 壓力測試的密度階梯。密度決定場景數量，``run_index`` 只當同一格內的
+#: 重複試驗／亂數種子；兩者不可再混用，否則 S1~S3 每格無法各跑四趟。
+STRESS_DENSITIES: tuple[str, ...] = ("S1", "S2", "S3")
 
-def run_tag(model: str, route: str, scenario: str, run_index: int) -> str:
+
+def run_tag(model: str, route: str, scenario: str, run_index: int,
+            density: str | None = None) -> str:
     """一趟來回的唯一標籤，例如 ``sa4r2_c27_static_run01``。
 
     模型放最前面：同一個模型的趟會排在一起，`ls` 出來就是分組的。
@@ -49,7 +54,16 @@ def run_tag(model: str, route: str, scenario: str, run_index: int) -> str:
     """
     if not route:
         raise ValueError("路線是空的 —— 兩條路線的趟會撞名")
-    return f"{model}_{route}_{scenario}_run{run_index:02d}"
+    level = f"_{normalise_density(density).lower()}" if density else ""
+    return f"{model}_{route}_{scenario}{level}_run{run_index:02d}"
+
+
+def normalise_density(density: str) -> str:
+    """驗證並正規化壓力密度名稱。"""
+    value = str(density).upper()
+    if value not in STRESS_DENSITIES:
+        raise ValueError(f"未知壓力密度 {density!r}；可用值：{', '.join(STRESS_DENSITIES)}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -61,10 +75,12 @@ class RunSpec:
     run_index: int
     root: Path
     route: str = "c27"
+    density: str | None = None
 
     @property
     def tag(self) -> str:
-        return run_tag(self.model, self.route, self.scenario, self.run_index)
+        return run_tag(self.model, self.route, self.scenario, self.run_index,
+                       self.density)
 
     @property
     def run_dir(self) -> Path:
@@ -119,4 +135,39 @@ def build_plan(runs_per_scenario: int, root, models=DEFAULT_MODELS,
         for m in models
         for s in SCENARIO_NAMES
         for i in range(1, runs_per_scenario + 1)
+    )
+
+
+def build_stress_plan(runs_per_density: int, root, models=DEFAULT_MODELS,
+                      routes=None, densities=STRESS_DENSITIES) -> tuple[RunSpec, ...]:
+    """建立獨立的壓力測試計畫。
+
+    順序是 路線 → 模型 → 密度 → 情境 → 重複試驗。正式 72 趟仍由
+    :func:`build_plan` 產生，標籤與目錄完全不變。
+    """
+    import ros_graph_spec as S
+
+    routes = tuple(routes) if routes is not None else S.ROUTE_ORDER
+    if not routes:
+        raise ValueError("路線清單是空的")
+    for rk in routes:
+        S.route(rk)
+    if runs_per_density < 1:
+        raise ValueError(f"每個密度至少要一趟，收到 {runs_per_density}")
+    if not models:
+        raise ValueError("模型清單是空的")
+    levels = tuple(normalise_density(d) for d in densities)
+    if not levels:
+        raise ValueError("密度清單是空的")
+    if len(set(levels)) != len(levels):
+        raise ValueError(f"密度清單有重複：{levels}")
+    root = Path(root)
+    return tuple(
+        RunSpec(model=m, scenario=s, run_index=i, root=root, route=rk,
+                density=density)
+        for rk in routes
+        for m in models
+        for density in levels
+        for s in SCENARIO_NAMES
+        for i in range(1, runs_per_density + 1)
     )

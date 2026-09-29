@@ -102,14 +102,17 @@ def _link(target: Path, link: Path) -> None:
         link.symlink_to(os.path.relpath(target.resolve(), link.parent.resolve()))
 
 
-def video_relpath(model: str, route, scenario: str, zh: str) -> Path:
+def video_relpath(model: str, route, scenario: str, zh: str,
+                  density="") -> Path:
     """一支影片在索引樹裡的位置：``模型/路線/情境/<模型>_<中文檔名>``。
 
     檔名前面再加一次模型名：使用者會把影片複製到別處（例如 `上傳/`），
     離開資料夾之後檔名本身要能說出是哪個模型。
     """
-    return (Path(f"模型{model}") / route_dir(route) / scenario_dir(scenario)
-            / f"{model}_{zh}")
+    base = Path(f"模型{model}") / route_dir(route)
+    if density:
+        base /= f"密度{density}"
+    return base / scenario_dir(scenario) / f"{model}_{zh}"
 
 
 def _runs(root: Path):
@@ -133,21 +136,22 @@ def build(root: Path, arm_roots: dict[str, Path]) -> dict[str, int]:
         if cnt is None:
             unknown.append(run_dir.name)
         mode = meta.get("crowd_mode")
+        density = meta.get("density") or ""
         rk = _route_of(meta)
         model = meta.get("model") or meta["tag"].split("_", 1)[0]
         for mp4 in sorted((run_dir / "video").glob("*.mp4")):
             cam = mp4.stem.rsplit("_", 1)[-1]
             if cam not in CAMERA_ZH:
                 continue
-            zh = video_name(scen, idx, cam, cnt, mode, rk)
-            rel = video_relpath(model, rk, scen, zh)
+            zh = video_name(scen, idx, cam, cnt, mode, rk, density)
+            rel = video_relpath(model, rk, scen, zh, density)
             _link(mp4, browse / MAIN_DIRNAME / rel)
             # 原地再放一份：使用者會直接點進 recordings/模型xxx/
             _link(mp4, root / model_dir_name(model) / MODEL_INDEX_DIRNAME
                   / rel.relative_to(rel.parts[0]))
             n += 1
         _link(run_dir, browse / RAW_DIRNAME
-              / f"模型{model}_{run_label(scen, idx, cnt, mode, rk)}")
+              / f"模型{model}_{run_label(scen, idx, cnt, mode, rk, density)}")
     stats[MAIN_DIRNAME] = n
     if unknown:
         print(f"⚠ {len(unknown)} 趟讀不出場景數量，檔名標「數量不明」："
@@ -162,13 +166,14 @@ def build(root: Path, arm_roots: dict[str, Path]) -> dict[str, int]:
             scen, idx = meta["scenario"], int(meta.get("run_index", 0))
             cnt = _counts(run_dir)
             mode = meta.get("crowd_mode")
+            density = meta.get("density") or ""
             rk = _route_of(meta)
             for mp4 in sorted((run_dir / "video").glob("*.mp4")):
                 cam = mp4.stem.rsplit("_", 1)[-1]
                 if cam not in CAMERA_ZH:
                     continue
                 _link(mp4, browse / block
-                      / video_name(scen, idx, cam, cnt, mode, rk))
+                      / video_name(scen, idx, cam, cnt, mode, rk, density))
                 m += 1
         stats[block] = m
     return stats

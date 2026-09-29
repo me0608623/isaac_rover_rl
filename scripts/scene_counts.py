@@ -22,7 +22,10 @@ from __future__ import annotations
 import re
 
 # 路線欄位是 2026-09-23 加的（「情境 static／路線 c27／變體 run4」），舊 log 沒有
-_SCENE = re.compile(r"情境 (\w+)／(?:路線 \w+／)?變體 run(\d+)：靜態障礙 (\d+)/(\d+) 啟用")
+_SCENE = re.compile(
+    r"情境 (\w+)／(?:路線 \w+／)?變體 run(\d+)"
+    r"(?:／密度 \w+)?：靜態障礙 (\d+)/(\d+) 啟用"
+)
 # 驅動器建好**之後**才停用的角色：「程序化步態：N 人」的 N 仍含他們。
 # 這行只在 N>0 時印，讀不到就是 0（不是缺資料）。
 _OFF_LATE = re.compile(r"停用\(障礙關閉，站立人物不該存在\) (\d+) 個")

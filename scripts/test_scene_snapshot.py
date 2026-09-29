@@ -27,6 +27,12 @@ def test_roundtrip_keeps_every_obstacle_field(tmp_path):
     assert back[1].kind == "person"
 
 
+def test_snapshot_keeps_stress_density(tmp_path):
+    snap = build_snapshot("mixed", 2, [], [], route="c27", density="S2")
+    write_snapshot(tmp_path, snap)
+    assert read_snapshot(tmp_path)["density"] == "S2"
+
+
 def test_still_bodies_excludes_walkers(tmp_path):
     write_snapshot(tmp_path, _snap())
     assert still_bodies(read_snapshot(tmp_path)) == [(-12.5, 5.0)]

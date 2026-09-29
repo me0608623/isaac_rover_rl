@@ -85,3 +85,11 @@ def test_characters_disabled_after_the_driver_are_not_counted():
            "[run_isaac_sim] 程序化步態：4 人 / 32 個擺動關節 / 2 人沿路徑移動"
            "　站立人物擺位 0 個　停放行人 0 個　腳底對地 2 個\n")
     assert counts_from_log(log) == (0, 2)
+
+
+def test_stress_log_format_with_density_is_parseable():
+    log = ("[run_isaac_sim] 情境 mixed／路線 c27／變體 run1／密度 S1："
+           "靜態障礙 8/276 啟用　行人走動 開\n"
+           "[run_isaac_sim] 程序化步態：16 人 / 128 個擺動關節 / 12 人沿路徑移動"
+           "　站立人物擺位 4 個　停放行人 0 個　腳底對地 4 個\n")
+    assert counts_from_log(log) == (8, 12)

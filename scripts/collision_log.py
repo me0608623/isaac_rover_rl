@@ -53,6 +53,14 @@ FLUSH_EVERY_S = 1.0
 #: 跑過一次才會擺到身上。
 CONTROL_AT_STEP = 10
 
+#: 最小淨空也用 PhysX 真值幾何量，不用會在 0.5 m 飽和的光達。
+#: 每 0.1 模擬秒，把車身盒在 xy 各方向等量向外擴張並做二分搜尋；第一個碰到
+#: 非自身碰撞體的 margin，就是保守的「車身盒淨空」。這是盒狀 margin，不是假裝
+#: 成精確 Euclidean mesh distance；方法與解析度會一起寫進 JSON。
+CLEARANCE_SAMPLE_EVERY_S = 0.1
+CLEARANCE_MAX_M = 2.0
+CLEARANCE_RESOLUTION_M = 0.02
+
 
 def is_self(path: str) -> bool:
     return bool(path) and path.startswith(ROBOT_PREFIX)
@@ -186,6 +194,11 @@ class CollisionLogger:
         self.overlap_steps = 0
         self.overlap_self_steps = 0
         self.controls: dict = {}
+        self._last_clearance = -1e9
+        self._clearance_best = CLEARANCE_MAX_M
+        self._clearance_seen = False
+        self._clearance_samples = 0
+        self._clearance_categories: list[str] = []
         print(f"[collision_log] 重疊查詢盒半邊長 {BODY_BOX_HALF} → {csv_path}")
 
     # ── 查詢 ──────────────────────────────────────────────────────────
@@ -244,6 +257,52 @@ class CollisionLogger:
         print(f"[collision_log] 正向對照 {self.controls}"
               + (f"　⚠ 查不到{'、'.join(bad)} —— 偵測器對它們是瞎的" if bad else ""))
 
+    def _clearance_hits(self, centre, quat_xyzw, margin: float) -> list[str]:
+        """車身盒向 xy 擴張 ``margin`` 後碰到的外物（排除自己與 NavFloor）。"""
+        half = (BODY_BOX_HALF[0] + margin, BODY_BOX_HALF[1] + margin,
+                BODY_BOX_HALF[2])
+        return [p for p in self._query(centre, half, quat_xyzw)
+                if not is_self(p) and not p.startswith("/World/NavFloor")]
+
+    def _sample_clearance(self, centre, quat_xyzw) -> None:
+        """更新整趟最小真值幾何淨空；只在可能刷新最小值時做二分搜尋。"""
+        self._clearance_samples += 1
+        hits = self._clearance_hits(centre, quat_xyzw, self._clearance_best)
+        if not hits:
+            return
+        lo, hi = 0.0, self._clearance_best
+        best_hits = hits
+        while hi - lo > CLEARANCE_RESOLUTION_M:
+            mid = (lo + hi) / 2.0
+            got = self._clearance_hits(centre, quat_xyzw, mid)
+            if got:
+                hi, best_hits = mid, got
+            else:
+                lo = mid
+        self._clearance_best = hi
+        self._clearance_seen = True
+        cats = []
+        for path in best_hits:
+            cls = classify_hit(path, self._walking)
+            label = cls[0] if cls is not None else "其他"
+            if label != "地板" and label not in cats:
+                cats.append(label)
+        self._clearance_categories = sorted(cats)
+
+    def _clearance_summary(self) -> dict:
+        return {
+            "min_m": (round(self._clearance_best, 3)
+                      if self._clearance_seen else None),
+            "lower_bound_m": (None if self._clearance_seen else CLEARANCE_MAX_M),
+            "nearest_categories": self._clearance_categories,
+            "samples": self._clearance_samples,
+            "sample_period_s": CLEARANCE_SAMPLE_EVERY_S,
+            "resolution_m": CLEARANCE_RESOLUTION_M,
+            "method": "physx_overlap_expanded_body_box_xy",
+            "geometry_truth": True,
+            "complete": self._clearance_samples > 0,
+        }
+
     def step(self, t: float, base_link_world) -> None:
         self._t = t
         (cx, cy, cz), q = body_box_world(base_link_world)
@@ -257,6 +316,14 @@ class CollisionLogger:
             except Exception as e:                # 對照本身壞了也要說
                 self.controls["錯誤"] = False
                 print(f"[collision_log] ⚠ 正向對照失敗：{e!r}")
+        if t - self._last_clearance >= CLEARANCE_SAMPLE_EVERY_S:
+            self._last_clearance = t
+            try:
+                self._sample_clearance((cx, cy, cz), q)
+            except Exception as e:
+                # 碰撞記錄仍可繼續，但淨空不得假裝成有效的 0 或無限大。
+                self._clearance_samples = 0
+                print(f"[collision_log] ⚠ 真值淨空查詢失敗：{e!r}")
         seen = set()
         for path in hits:
             cls = classify_hit(path, self._walking)
@@ -273,6 +340,7 @@ class CollisionLogger:
     def _write_summary(self, episodes, final: bool) -> dict:
         s = summarise(episodes, self.overlap_steps, self.overlap_self_steps,
                       self.controls)
+        s["clearance"] = self._clearance_summary()
         s["final"] = final                  # False = 被 kill 前最後一次的定期存檔
         s["sim_time"] = round(self._t, 3)
         out = self._csv_path.with_name("collisions_summary.json")

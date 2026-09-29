@@ -125,20 +125,22 @@ def route_label(route) -> str:
     return f"路線{route}_" if route else ""
 
 
-def run_label(scenario: str, run_index: int, counts, crowd_mode, route="") -> str:
+def run_label(scenario: str, run_index: int, counts, crowd_mode, route="",
+              density="") -> str:
     """一趟的中文標籤，例如 ``路線c27_混合_ORCA互動_第4趟_靜6動8``。"""
     if scenario not in SCENARIO_ZH:
         raise ValueError(f"未知情境 {scenario!r}")
     n_dyn = counts[1] if counts else 0
-    return (f"{route_label(route)}{SCENARIO_ZH[scenario]}_"
+    density_label = f"密度{density}_" if density else ""
+    return (f"{route_label(route)}{density_label}{SCENARIO_ZH[scenario]}_"
             f"{crowd_mode_label(crowd_mode, n_dyn)}"
             f"_第{run_index}趟_{counts_label(counts)}")
 
 
 def video_name(scenario: str, run_index: int, camera: str, counts,
-               crowd_mode, route="") -> str:
+               crowd_mode, route="", density="") -> str:
     """一個影片檔的中文名。"""
     if camera not in CAMERA_ZH:
         raise ValueError(f"未知視角 {camera!r}")
-    return (f"{run_label(scenario, run_index, counts, crowd_mode, route)}_"
+    return (f"{run_label(scenario, run_index, counts, crowd_mode, route, density)}_"
             f"{CAMERA_ZH[camera]}.mp4")

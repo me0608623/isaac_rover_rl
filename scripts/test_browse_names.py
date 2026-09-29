@@ -115,3 +115,11 @@ def test_route_is_in_the_name_so_the_two_routes_never_collide():
 def test_old_runs_without_a_route_keep_their_names():
     assert video_name("mixed", 4, "topdown", (6, 8), "orca") == \
         "混合_ORCA互動_第4趟_靜6動8_俯視.mp4"
+
+
+def test_stress_density_is_in_name_but_formal_name_is_unchanged():
+    stress = video_name("mixed", 1, "topdown", (8, 12), "orca",
+                        route="c27", density="S1")
+    assert stress == "路線c27_密度S1_混合_ORCA互動_第1趟_靜8動12_俯視.mp4"
+    assert "密度" not in video_name("mixed", 1, "topdown", (6, 8), "orca",
+                                     route="c27")

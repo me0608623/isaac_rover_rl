@@ -61,3 +61,43 @@ def test_first_entry_skips_the_start_when_already_near_a_wall():
     g = WallGrid.from_segments(slice_segments(_wall(-0.3, -3.0, 3.0), 1.5)).dilated(0.6)
     assert g.occupied(0.0, 0.0)
     assert g.first_entry(0.0, 0.0, 1.0, 0.0, 3.0) is None
+
+
+def _door_grid(opening_m: float):
+    """10×10 m，中間一道只有指定開口寬度的牆。"""
+    g = WallGrid(0.0, 0.0, 200, 200, cell=0.05)
+    wall_i = 100
+    g.occ[wall_i, :] = True
+    half = int(round(opening_m / g.cell / 2.0))
+    g.occ[wall_i, 100 - half:100 + half] = False
+    return g
+
+
+def test_dilation_turns_minimum_passage_width_into_connectivity_gate():
+    """膨脹 0.45 m 後，1.0 m 門可過、0.8 m 門不可過。"""
+    start, goal = (2.0, 5.0), (8.0, 5.0)
+    assert _door_grid(1.0).dilated(0.45).has_path(start, goal)
+    assert not _door_grid(0.8).dilated(0.45).has_path(start, goal)
+
+
+def test_obstacle_rasterizers_block_the_expected_cells():
+    g = WallGrid(0.0, 0.0, 100, 100, cell=0.05)
+    g.add_disk(1.0, 1.0, 0.25)
+    g.add_oriented_box(3.0, 3.0, 1.0, 0.4, np.pi / 2)
+    assert g.occupied(1.0, 1.0)
+    assert not g.occupied(1.4, 1.0)
+    assert g.occupied(3.0, 3.4)       # 長邊旋成 y 方向
+    assert not g.occupied(3.4, 3.0)
+
+
+def test_ros_map_reader_preserves_map_frame_axes(tmp_path):
+    """PGM 左上原點要翻成 map frame 左下原點。"""
+    pgm = tmp_path / "tiny.pgm"
+    pgm.write_bytes(b"P5\n# comment\n2 2\n255\n" + bytes([0, 255, 255, 255]))
+    yml = tmp_path / "tiny.yaml"
+    yml.write_text(
+        "image: tiny.pgm\nresolution: 1.0\norigin: [10.0, 20.0, 0.0]\n"
+        "negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n")
+    g = WallGrid.from_ros_map(pgm, yml)
+    assert g.occupied(10.5, 21.5)      # PGM 左上黑格 → map 左上
+    assert not g.occupied(11.5, 20.5)

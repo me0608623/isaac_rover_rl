@@ -88,24 +88,110 @@ def density_table(runs):
     """
     idxs = sorted({r.get("run_index", 0) for r in runs if r.get("run_index")})
     routes = sorted({route_of(r) for r in runs})
+    densities = sorted({r.get("density") or "" for r in runs})
+    stress = any(densities)
     multi = len(routes) > 1 or routes != [""]
-    head = ("| 路線 | 情境 | " if multi else "| 情境 | ")
+    head = ("| 路線 | " if multi else "|") + ("密度 | " if stress else "") + "情境 | "
     out = [head + " | ".join(f"第{i}趟" for i in idxs) + " |",
-           ("|---|---|" if multi else "|---|") + "---|" * len(idxs)]
+           "|" + "---|" * ((1 if multi else 0) + (1 if stress else 0) + 1 + len(idxs))]
     for rk in routes:
-        for sc in ("static", "dynamic", "mixed"):
-            cells = []
-            for i in idxs:
-                got = sorted({tuple(r["counts"]) for r in runs
-                              if route_of(r) == rk and r.get("scenario") == sc
-                              and r.get("run_index") == i and r.get("counts")})
-                cells.append(" / ".join(f"靜{a}動{b}" for a, b in got) if got else "—")
-            lead = f"| {rk} | " if multi else "| "
-            out.append(f"{lead}{SCEN_ZH[sc]} | " + " | ".join(cells) + " |")
+        for density in densities:
+            for sc in ("static", "dynamic", "mixed"):
+                cells = []
+                for i in idxs:
+                    got = sorted({tuple(r["counts"]) for r in runs
+                                  if route_of(r) == rk and (r.get("density") or "") == density
+                                  and r.get("scenario") == sc
+                                  and r.get("run_index") == i and r.get("counts")})
+                    cells.append(" / ".join(f"靜{a}動{b}" for a, b in got) if got else "—")
+                lead = f"| {rk} | " if multi else "| "
+                if stress:
+                    lead += f"{density} | "
+                out.append(f"{lead}{SCEN_ZH[sc]} | " + " | ".join(cells) + " |")
     return out
 
 
+def _clearance_cell(runs) -> str:
+    vals, lower_bounds, incomplete = [], [], False
+    for r in runs:
+        c = ((r.get("collisions") or {}).get("clearance") or {})
+        if c.get("complete") and c.get("min_m") is not None:
+            vals.append(float(c["min_m"]))
+        elif c.get("complete") and c.get("lower_bound_m") is not None:
+            lower_bounds.append(float(c["lower_bound_m"]))
+        else:
+            incomplete = True
+    if not vals:
+        if lower_bounds:
+            return f"≥{min(lower_bounds):.2f}" + (" ⚠ 部分缺資料" if incomplete else "")
+        return "—（無真值欄位）"
+    return f"{min(vals):.2f}" + (" ⚠ 部分缺資料" if incomplete else "")
+
+
+def render_stress(runs, has_browse_tree: bool = True) -> str:
+    """壓力測試專用 README；避免套用正式 72 趟的固定四難度敘述。"""
+    L = ["# 障礙密度壓力測試", ""]
+    models = sorted({r["model"] for r in runs})
+    routes = sorted({route_of(r) for r in runs})
+    densities = sorted({r.get("density") for r in runs if r.get("density")})
+    L += [f"{len(models)} 模型 × {len(routes)} 路線 × {len(densities)} 密度 × 3 情境；"
+          f"目前共有 **{len(runs)} 趟**。所有原始資料都在本 `recordings_stress/` 樹內，"
+          "不會覆蓋正式 72 趟。", ""]
+    if has_browse_tree:
+        L += ["中文影片索引在 `00_影片總覽/`；路徑中含 `密度S1`～`密度S3`，"
+              "同一個 run 編號不會互相覆蓋。", ""]
+    L += ["## 實際場景數量", "",
+          "數量由每趟 `isaac_nav.log` 反查，不拿規格值冒充實際值。", ""]
+    L.extend(density_table(runs))
+    L += ["", "## 結果（密度 × 模型 × 情境）", "",
+          "| 模型 | 路線 | 密度 | 情境 | 成功趟 | 成功率 | 抵達段 | 未達段 | 真的碰到 | 最小真值淨空 m |",
+          "|---|---|---|---|---:|---:|---:|---:|---:|---:|"]
+    for model in models:
+        for route in routes:
+            for density in densities:
+                for scen in ("static", "dynamic", "mixed"):
+                    sel = [r for r in runs if r["model"] == model and route_of(r) == route
+                           and r.get("density") == density and r["scenario"] == scen]
+                    if not sel:
+                        continue
+                    legs = [leg for r in sel for leg in r.get("legs", [])]
+                    ok = sum(leg["result"] == "OK" for leg in legs)
+                    success_runs = sum(len(r.get("legs", [])) == 2 and
+                                       all(leg["result"] == "OK" for leg in r["legs"])
+                                       for r in sel)
+                    success_pct = 100.0 * success_runs / len(sel)
+                    missing_collision = any(not r.get("collisions") for r in sel)
+                    broken = any((r.get("collisions") or {}).get("detector", {})
+                                 .get("overlap_ok") is False for r in sel)
+                    touched = sum((r.get("collisions") or {}).get("episodes", 0) for r in sel)
+                    touch = ("⚠ 偵測器失效" if broken else
+                             "—（缺資料）" if missing_collision else str(touched))
+                    L.append(f"| {model} | {route} | {density} | {SCEN_ZH[scen]} | "
+                             f"{success_runs}/{len(sel)} | {success_pct:.1f}% | "
+                             f"{ok}/{len(legs)} | {len(legs)-ok} | {touch} | "
+                             f"{_clearance_cell(sel)} |")
+    L += ["", "逾時／卡住段數與實際行駛時間請看 `driving_time.csv`，由：", "",
+          "```bash",
+          "python3 scripts/driving_time.py recordings_stress > recordings_stress/driving_time.md",
+          "```", "",
+          "真值淨空是錄影當下以 PhysX 幾何做車身盒擴張重疊查詢；方法與解析度存於 "
+          "`run.json → collisions.clearance`。舊資料沒有欄位時明確顯示 `—`，不以光達值代填。",
+          "", "## 逐趟", "",
+          "| tag | 模型 | 路線 | 密度 | 情境 | 重複 | 抵達 | 真的碰到 | 真值淨空 m | 影片 |",
+          "|---|---|---|---|---|---:|---:|---:|---:|---:|"]
+    for r in sorted(runs, key=lambda x: x["tag"]):
+        legs = r.get("legs", [])
+        ok = sum(leg["result"] == "OK" for leg in legs)
+        L.append(f"| `{r['tag']}` | {r['model']} | {route_of(r)} | {r.get('density')} | "
+                 f"{SCEN_ZH[r['scenario']]} | {r['run_index']} | {ok}/{len(legs)} | "
+                 f"{collision_cell(r.get('collisions'))} | {_clearance_cell([r])} | "
+                 f"{len(r.get('videos', []))} |")
+    return "\n".join(L) + "\n"
+
+
 def render(runs, has_browse_tree: bool = True) -> str:
+    if any(r.get("density") for r in runs):
+        return render_stress(runs, has_browse_tree)
     L = []
     A = L.append
     A("# 論文錄影產物")

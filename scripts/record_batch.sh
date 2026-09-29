@@ -15,7 +15,21 @@ set -o pipefail
 cd "$(dirname "$0")/.." || exit 1
 WS=$PWD
 
-ROOT=${ROOT:-$WS/recordings}
+# 設定 DENSITIES=S1,S2,S3 才進壓力模式；正式模式的預設與標籤完全不變。
+# 壓力資料預設強制分流到 recordings_stress，避免覆蓋正式 72 趟。
+DENSITIES=${DENSITIES:-}
+if [ -n "$DENSITIES" ]; then
+    ROOT=${ROOT:-$WS/recordings_stress}
+    DEFAULT_LEG_TIMEOUT=300
+    FORMAL_ROOT=$(realpath -m "$WS/recordings")
+    REQUESTED_ROOT=$(realpath -m "$ROOT")
+    [ "$REQUESTED_ROOT" != "$FORMAL_ROOT" ] || {
+        echo "⚠ 壓力模式不可寫入正式 recordings/；請改用 recordings_stress/"; exit 2;
+    }
+else
+    ROOT=${ROOT:-$WS/recordings}
+    DEFAULT_LEG_TIMEOUT=200
+fi
 # 路線的唯一定義在 scripts/ros_graph_spec.py（ROUTES）。
 # ⚠ 這裡讀的只是預設值，逐趟的起終點由計畫表帶進 run_one（兩條路線各一半）。
 # ⚠ 不要在這裡寫死站名：2026-09-23 由 c28↔c25 改成 c28↔c27，
@@ -24,7 +38,9 @@ read -r R_START R_GOAL <<<"$(PYTHONPATH="$WS/scripts" "$WS/.venv/bin/python" -c 
     "import ros_graph_spec as S; print(S.ROUTE_START, S.ROUTE_GOAL)")"
 [ -n "$R_START" ] && [ -n "$R_GOAL" ] || { echo "⚠ 讀不到路線設定，中止"; exit 2; }
 RUNS=${RUNS:-4}
-LEG_TIMEOUT=${LEG_TIMEOUT:-200}   # 每段逾時（模擬秒；monitor 用 --sim-time）
+# 壓力模式預設給 300 s，讓「很慢但仍抵達」和「卡住」分得開；報表會另外統計
+# 卡住區段。正式錄影仍維持原本的 200 s。
+LEG_TIMEOUT=${LEG_TIMEOUT:-$DEFAULT_LEG_TIMEOUT}   # 每段逾時（模擬秒；monitor 用 --sim-time）
 WIDTH=${WIDTH:-1280}
 HEIGHT=${HEIGHT:-720}
 FPS=${FPS:-30}
@@ -46,6 +62,7 @@ BAG_TOPICS=(
     /vo_safety_node/status /rover_rl_policy/status
     /charge_description
 )
+BAG_PID=""
 
 mkdir -p "$ROOT"
 BATCH_LOG="$ROOT/batch.log"
@@ -53,7 +70,18 @@ say () { echo "[$(date '+%F %T')] $*" | tee -a "$BATCH_LOG"; }
 
 cleanup_all () {
     ./sim_deploy_stop.sh >/dev/null 2>&1
-    pkill -f "ros2 ba[g] record" 2>/dev/null
+    # ros2 bag 的 Python CLI 在這台機器上實測不理會原本的 pkill -INT；
+    # 記住這一趟的精確 PID，用 TERM 才會做 zstd 收尾並寫 metadata.yaml。
+    if [ -n "$BAG_PID" ] && kill -0 "$BAG_PID" 2>/dev/null; then
+        kill -TERM "$BAG_PID" 2>/dev/null
+        for _ in $(seq 1 45); do
+            kill -0 "$BAG_PID" 2>/dev/null || break
+            sleep 2
+        done
+        kill -KILL "$BAG_PID" 2>/dev/null || true
+        wait "$BAG_PID" 2>/dev/null || true
+    fi
+    BAG_PID=""
     pkill -INT -f "run_isaac_si[m].py" 2>/dev/null
     pkill -INT -f "replay_rende[r].py" 2>/dev/null
     sleep 6
@@ -63,27 +91,49 @@ cleanup_all () {
 }
 trap 'say "收到中斷，收拾現場"; cleanup_all; exit 130' INT TERM
 
+# 開 Isaac 前先把所有路線 × 密度 × 重複的可通行性跑完；任何一格低於 0.9 m
+# 就 fail-fast，不花數小時錄一個本來就過不了的場景。
+if [ -n "$DENSITIES" ]; then
+    say "壓力場景 preflight（可通行寬度 ≥0.9 m）"
+    PYTHONPATH="$WS/scripts" .venv/bin/python - <<'PY' || {
+from scene_variants import preflight_density_variants
+preflight_density_variants()
+print("preflight 全部通過")
+PY
+        say "⚠ 壓力場景 preflight 失敗，中止"; exit 2;
+    }
+fi
+
 PLAN_FILE=$(mktemp)
-PYTHONPATH="$WS/scripts" .venv/bin/python - "$RUNS" "$ROOT" > "$PLAN_FILE" <<'PY'
+PYTHONPATH="$WS/scripts" .venv/bin/python - "$RUNS" "$ROOT" "$DENSITIES" > "$PLAN_FILE" <<'PY'
 import sys
-from record_plan import build_plan
+from record_plan import build_plan, build_stress_plan
 import ros_graph_spec as S
-for r in build_plan(int(sys.argv[1]), sys.argv[2]):
+density_arg = sys.argv[3].strip()
+if density_arg:
+    levels = tuple(x.strip() for x in density_arg.split(",") if x.strip())
+    plan = build_stress_plan(int(sys.argv[1]), sys.argv[2], densities=levels)
+else:
+    plan = build_plan(int(sys.argv[1]), sys.argv[2])
+for r in plan:
     rt = S.route(r.route)
-    print(f"{r.model}\t{r.scenario}\t{r.tag}\t{r.run_index}\t{r.route}\t{rt.start}\t{rt.goal}")
+    print(f"{r.model}\t{r.scenario}\t{r.tag}\t{r.run_index}\t{r.route}\t{rt.start}\t{rt.goal}\t{r.density or ''}")
 PY
 if [ ! -s "$PLAN_FILE" ]; then say "⚠ 產不出計畫表，中止"; exit 2; fi
-say "計畫共 $(wc -l < "$PLAN_FILE") 趟來回 → $ROOT"
+say "計畫共 $(wc -l < "$PLAN_FILE") 趟來回 → $ROOT${DENSITIES:+（壓力密度 $DENSITIES）}"
 
 # ── 第一遍：導航 + rosbag + 位姿 CSV ───────────────────────────────────
 pass_one () {
-    local MODEL="$1" SCEN="$2" TAG="$3" DIR="$4" IDX="$5"
+    local MODEL="$1" SCEN="$2" TAG="$3" DIR="$4" IDX="$5" DENSITY="$6"
     local BAG="$DIR/bag" NAV="$DIR/nav" POSE="$DIR/pose.csv"
     local CROWD="$DIR/crowd.csv"
     cleanup_all
 
     say "  [1a] Isaac（不算圖，全速）"
+    local DENSITY_ARGS=()
+    [ -n "$DENSITY" ] && DENSITY_ARGS=(--density "$DENSITY")
     nohup ./run_sim.sh --scenario "$SCEN" --route "$ROUTE" --run-index "$IDX" \
+          "${DENSITY_ARGS[@]}" \
           --crowd-mode "$CROWD_MODE" \
           --pose-log "$POSE" --crowd-log "$CROWD" \
           --collision-log "$DIR/collisions.csv" \
@@ -136,6 +186,7 @@ pass_one () {
     nohup ros2 bag record -o "$BAG/$TAG" \
           --compression-mode file --compression-format zstd \
           "${BAG_TOPICS[@]}" > "$DIR/bag.log" 2>&1 &
+    BAG_PID=$!
     sleep 4
 
     say "  [1e] 導航 $R_START → $R_GOAL → $R_START"
@@ -145,15 +196,23 @@ pass_one () {
         | grep -vE "^\[WARN\]|deprecated|localhost" > "$DIR/nav.log"
     sed -n '/^段  /,$p' "$DIR/nav.log" | head -5 | tee -a "$BATCH_LOG"
 
-    pkill -INT -f "ros2 ba[g] record" 2>/dev/null
+    kill -TERM "$BAG_PID" 2>/dev/null
     # 等 bag 真的收尾（寫出 metadata.yaml）。固定 sleep 5 不夠：
     # 200~300 MB 的 bag 做 file 級 zstd 壓縮可能更久，被後續 kill 砍掉就會
     # 留下沒有 metadata 的檔，rosbag2 之後開不起來。
     for _ in $(seq 1 45); do
-        [ -f "$BAG/$TAG/metadata.yaml" ] && break
-        pgrep -f "ros2 ba[g] record" >/dev/null || break
+        if [ -f "$BAG/$TAG/metadata.yaml" ] && ! kill -0 "$BAG_PID" 2>/dev/null; then
+            break
+        fi
+        kill -0 "$BAG_PID" 2>/dev/null || break
         sleep 2
     done
+    if kill -0 "$BAG_PID" 2>/dev/null; then
+        say "  ⚠ bag 超過 90 秒仍未收尾，強制停止"
+        kill -KILL "$BAG_PID" 2>/dev/null
+    fi
+    wait "$BAG_PID" 2>/dev/null || true
+    BAG_PID=""
     [ -f "$BAG/$TAG/metadata.yaml" ] \
         || say "  ⚠ bag 沒收尾（缺 metadata.yaml），事後需 ros2 bag reindex"
     ./sim_deploy_stop.sh >/dev/null 2>&1
@@ -200,18 +259,18 @@ pass_two () {
 run_one () {
     local MODEL="$1" SCEN="$2" TAG="$3" IDX="$4"
     # 逐趟路線：pass_one / run.json 會看到這三個（bash 動態作用域）
-    local ROUTE="$5" R_START="$6" R_GOAL="$7"
+    local ROUTE="$5" R_START="$6" R_GOAL="$7" DENSITY="$8"
     local DIR="$ROOT/模型$MODEL/$TAG"
     if [ -s "$DIR/video/${TAG}_chase.mp4" ] && [ -f "$DIR/run.json" ]; then
         say "  $TAG 已完成，跳過"; return 0
     fi
-    say "════ $TAG（模型 $MODEL／路線 $R_START↔$R_GOAL／情境 $SCEN）════"
+    say "════ $TAG（模型 $MODEL／路線 $R_START↔$R_GOAL／情境 $SCEN${DENSITY:+／密度 $DENSITY}）════"
     rm -rf "$DIR"; mkdir -p "$DIR/bag" "$DIR/nav" "$DIR/video"
-    pass_one "$MODEL" "$SCEN" "$TAG" "$DIR" "$IDX" \
+    pass_one "$MODEL" "$SCEN" "$TAG" "$DIR" "$IDX" "$DENSITY" \
         || { say "  ⚠ $TAG 第一遍失敗，跳過"; cleanup_all; return 1; }
     pass_two "$SCEN" "$TAG" "$DIR" "$IDX"
 
-    PYTHONPATH="$WS/scripts" .venv/bin/python - "$DIR" "$SCEN" "$TAG" "$FPS" "$MODEL" "$SPEED_RATE" "$IDX" "$R_START" "$R_GOAL" "$ROUTE" <<'PY'
+    PYTHONPATH="$WS/scripts" .venv/bin/python - "$DIR" "$SCEN" "$TAG" "$FPS" "$MODEL" "$SPEED_RATE" "$IDX" "$R_START" "$R_GOAL" "$ROUTE" "$DENSITY" "$LEG_TIMEOUT" <<'PY'
 import json, sys
 from pathlib import Path
 d, scen, tag, fps, model, srate = (Path(sys.argv[1]), sys.argv[2], sys.argv[3],
@@ -223,11 +282,15 @@ meta = {
     # argv: 1=DIR 2=SCEN 3=TAG 4=FPS 5=MODEL 6=SPEED_RATE 7=IDX 8=起點 9=終點 10=路線
     "route": [sys.argv[8], sys.argv[9], sys.argv[8]],
     "route_key": sys.argv[10],
+    "density": sys.argv[11] or None,
+    "leg_timeout_s": float(sys.argv[12]),
     "model_loaded": next((l.strip() for l in
                           (d / "stack.log").read_text(errors="replace").splitlines()
                           if "RL profile" in l), None) if (d / "stack.log").exists() else None,
     "videos": sorted(p.name for p in (d / "video").glob("*.mp4")),
-    "bag": sorted(p.name for p in (d / "bag").rglob("*.mcap")),
+    # file 級 zstd 壓縮會把 MCAP 變成 ``*.mcap.zstd``；只 glob ``*.mcap``
+    # 會讓有效 bag 在 run.json 裡被誤報成空清單。
+    "bag": sorted(p.name for p in (d / "bag").rglob("*.mcap*")),
     "nav_csv": sorted(p.name for p in (d / "nav").glob("*.csv")),
     "pose_rows": sum(1 for _ in (d / "pose.csv").open()) - 1
                  if (d / "pose.csv").exists() else 0,
@@ -255,10 +318,10 @@ PY
 #   2026-09-22 踩過：ffmpeg 預設會把 stdin 整個吃掉，計畫表被讀光，
 #   12 趟只跑了第 1 趟就印「批次完成」，而且沒有任何錯誤訊息。
 #   ffmpeg 那邊也補了 -nostdin，兩道保險。
-while IFS=$'\t' read -r MODEL SCEN TAG IDX ROUTE RS RG <&3; do
+while IFS=$'\t' read -r MODEL SCEN TAG IDX ROUTE RS RG DENSITY <&3; do
     [ -z "$TAG" ] && continue
     if [ -n "${ONLY:-}" ] && [[ "$TAG" != *"$ONLY"* ]]; then continue; fi
-    run_one "$MODEL" "$SCEN" "$TAG" "$IDX" "$ROUTE" "$RS" "$RG"
+    run_one "$MODEL" "$SCEN" "$TAG" "$IDX" "$ROUTE" "$RS" "$RG" "$DENSITY"
 done 3< "$PLAN_FILE"
 
 cleanup_all

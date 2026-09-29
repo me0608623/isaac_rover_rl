@@ -34,6 +34,8 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 from ros_graph_spec import CharacterWalk, Obstacle
 
@@ -89,13 +91,37 @@ OBSTACLE_LATERAL_M = 1.25
 OBSTACLE_COUNTS: tuple[int, ...] = (3, 4, 5, 6)
 WALKER_COUNTS: tuple[int, ...] = (2, 4, 6, 8)
 
+
+@dataclass(frozen=True)
+class DensitySpec:
+    """壓力測試密度設定；``run_index`` 只決定 replicate 的亂數種子。"""
+
+    obstacle_count: int
+    walker_count: int
+    min_same_side_gap_m: float
+    min_opposite_side_gap_m: float
+
+
+#: 不改正式 run1~run4；只有明確傳 ``density=`` 才套用這三階。
+#: 高密度不再把縱向間距當成可通行的替代指標，最終一律再跑 0.9 m 格網檢查。
+DENSITY_LEVELS: dict[str, DensitySpec] = {
+    "S1": DensitySpec(8, 12, 1.50, 1.00),
+    "S2": DensitySpec(10, 16, 1.25, 0.85),
+    "S3": DensitySpec(12, 20, 1.00, 0.70),
+}
+
 #: 可以拿來當行人的角色。Character_09（貼在車後擋鏡頭）與
 #: Character_15（站在 routing 點 c24 上）不列入，執行期本來也會被停用。
 WALKER_POOL: tuple[str, ...] = (
     "Character_10", "Character_11", "Character_12", "Character_13",
     "Character_19", "Character_02", "Character_03", "Character_04",
     "Character_05", "Character_06",
-)
+) + tuple(f"Character_{i:02d}" for i in range(20, 30))
+
+#: 新角色由 build_ros_graph 預先寫入 USD。S3 的 20 個 walker 先占用這 20 個
+#: 名字；站立角色另由 STRESS_STANDING_POOL 分配。
+#: 這個介面也刻意讓 USD 產生器能直接查出必須新增 Character_20~29。
+STRESS_WALKER_POOL: tuple[str, ...] = WALKER_POOL
 
 #: 可以拿來當「站著的人」的角色池。與 WALKER_POOL 有重疊，
 #: variant() 會先分配 walker，剩下的才給站著的，不會撞號。
@@ -104,6 +130,13 @@ STANDING_POOL: tuple[str, ...] = (
     "Character", "Character_01", "Character_07", "Character_08",
     "Character_02", "Character_03", "Character_04", "Character_05",
     "Character_06",
+)
+
+#: 09/15 只是不適合留在 USD 原位；站立角色會被明確搬到障礙位置，因此可
+#: 安全補足高密度時大道具因站點淨空退成行人的額外名額。正式場景仍用原池，
+#: 保持 run1~run4 的角色指派逐位元不變。
+STRESS_STANDING_POOL: tuple[str, ...] = STANDING_POOL + (
+    "Character_09", "Character_15",
 )
 
 #: 行人速度池（m/s，皆 ≤1.0）。刻意挑成彼此的來回週期不成整數倍。
@@ -162,6 +195,13 @@ MIN_WALKER_START_GAP_M = 0.85
 #: 抽不到就是設定有問題，要**大聲失敗**而不是放一個重疊的起點。
 MAX_START_ATTEMPTS = 60
 
+#: 可通行測試要求的最小完整通道寬；0.9 m > 車寬 0.554 m，兩側合計
+#: 留 0.346 m 幾何餘裕。檢查時將牆與障礙向外膨脹一半（0.45 m）。
+MIN_PASSAGE_WIDTH_M = 0.9
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_MAP_PGM = _REPO_ROOT / "map/4v3F.pgm"
+_DEFAULT_MAP_YAML = _REPO_ROOT / "map/4v3F.yaml"
+
 
 def _far_enough(p, others, gap: float) -> bool:
     """``p`` 是否離 ``others`` 每一個都至少 ``gap``。
@@ -174,6 +214,66 @@ def _far_enough(p, others, gap: float) -> bool:
         if math.dist(p, q[:2]) < gap + extra:
             return False
     return True
+
+
+@lru_cache(maxsize=4)
+def _base_passage_grid(pgm: str, yml: str):
+    from wall_grid import WallGrid
+    return WallGrid.from_ros_map(pgm, yml, unknown_is_occupied=True)
+
+
+@lru_cache(maxsize=256)
+def _passage_is_open_cached(obstacles, parked, start, goal, width: float,
+                            pgm: str, yml: str) -> bool:
+    from wall_grid import WallGrid
+
+    base = _base_passage_grid(pgm, yml)
+    grid = WallGrid(base.x0, base.y0, *base.occ.shape, cell=base.cell)
+    grid.occ = base.occ.copy()
+    for o in obstacles:
+        if o.kind == "person":
+            grid.add_disk(o.map_x, o.map_y, o.radius)
+        else:
+            grid.add_oriented_box(o.map_x, o.map_y, o.size_x, o.size_y,
+                                  math.radians(o.yaw_deg))
+    for p in parked:
+        grid.add_disk(p.map_x, p.map_y, 0.25)
+    return grid.dilated(width / 2.0).has_path(start, goal)
+
+
+def passage_is_open(obstacles, route=None, stations=None, *, parked=(),
+                    width: float = MIN_PASSAGE_WIDTH_M,
+                    pgm=_DEFAULT_MAP_PGM, yml=_DEFAULT_MAP_YAML) -> bool:
+    """確認從路線起點到終點存在寬度至少 ``width`` 的 2D 通道。
+
+    先把地圖牆、靜態障礙與 static 情境停放的人畫進同一佔據格，再膨脹
+    ``width/2``；膨脹後若仍有自由格路徑，等價於一個直徑 ``width`` 的圓能
+    通過。這項幾何 gate 與模型、Isaac、ROS 無關，可在批次啟動前離線執行。
+    """
+    if width <= 0:
+        raise ValueError(f"通道寬度必須 > 0，收到 {width}")
+    import ros_graph_spec as S
+
+    if stations is None:
+        stations = S.read_station_nodes(S.ROUTING_STATION_JSON)
+    route_key = route or S.DEFAULT_ROUTE
+    spec = S.route(route_key)
+    start = tuple(stations[spec.start][:2])
+    goal = tuple(stations[spec.goal][:2])
+    return _passage_is_open_cached(
+        tuple(obstacles), tuple(parked), start, goal, float(width),
+        str(Path(pgm).resolve()), str(Path(yml).resolve()),
+    )
+
+
+def variant_is_passable(scene: SceneVariant, route=None, stations=None, *,
+                        include_parked: bool = True,
+                        width: float = MIN_PASSAGE_WIDTH_M) -> bool:
+    """``SceneVariant`` 的便利介面；預設驗 static（含安全停放行人）最壞情況。"""
+    return passage_is_open(
+        scene.obstacles, route=route, stations=stations,
+        parked=scene.parked if include_parked else (), width=width,
+    )
 
 
 def spine_length() -> float:
@@ -234,6 +334,19 @@ class SceneVariant:
     #: static 情境裡「本來會走、但這趟不走」的行人要停在哪裡。
     #: 不在這裡的會走行人，static 時整個停用（找不到安全位置）。
     parked: tuple[StandingPerson, ...] = ()
+    #: ``None`` 是正式 run1~run4；壓測則為 S1/S2/S3。
+    density: str | None = None
+
+
+def density_spec(density: str | None) -> tuple[str | None, DensitySpec | None]:
+    """正規化密度名稱並回傳規格；未知值要大聲失敗。"""
+    if density is None or str(density).strip() == "":
+        return None, None
+    key = str(density).strip().upper()
+    try:
+        return key, DENSITY_LEVELS[key]
+    except KeyError:
+        raise ValueError(f"未知密度 {density!r}；可用的是 {', '.join(DENSITY_LEVELS)}") from None
 
 
 def shoulder_pair_positions(rng: random.Random | None = None, s_mid=None):
@@ -251,15 +364,15 @@ def shoulder_pair_positions(rng: random.Random | None = None, s_mid=None):
             (s_mid, side * (SHOULDER_PAIR_LATERAL_M + half)))
 
 
-def _jitter_fraction(width: float) -> float:
+def _jitter_fraction(width: float, min_gap: float = MIN_OBSTACLE_GAP_M) -> float:
     """格寬 ``width`` 時能用多大的抖動（佔格寬比例），保證相鄰間隔 >= MIN_OBSTACLE_GAP_M。
 
     相鄰兩格各往內抖 j·w 時最近：間隔 = w − 2·j·w。要 >= MIN_GAP
     → j <= (w − MIN_GAP) / (2w)。run1 格很寬、抖得多；run4 格窄、幾乎等距。
     """
-    if width <= MIN_OBSTACLE_GAP_M:
+    if width <= min_gap:
         return 0.0
-    return min(STRATA_MAX_JITTER, (width - MIN_OBSTACLE_GAP_M) / (2.0 * width))
+    return min(STRATA_MAX_JITTER, (width - min_gap) / (2.0 * width))
 
 
 def strata(n_slots: int, lo: float, hi: float):
@@ -449,12 +562,13 @@ def _gap_ok(prev, sc: float, side: float) -> bool:
 SLOT_SPILL = 0.5
 
 
-def _slot_s_candidates(intervals, t0: float, t1: float, rng: random.Random):
+def _slot_s_candidates(intervals, t0: float, t1: float, rng: random.Random,
+                       min_gap: float = MIN_OBSTACLE_GAP_M):
     """一格（可擺放長度 [t0, t1]）的候選弧長：先試抖動抽到的，再往兩側掃；
     格內都試過了，才試往兩側延伸 SLOT_SPILL 格寬的位置。"""
     w = t1 - t0
     total = sum(b - a for a, b in intervals)
-    j = _jitter_fraction(w)
+    j = _jitter_fraction(w, min_gap)
     t_first = (t0 + t1) / 2.0 + rng.uniform(-1.0, 1.0) * j * w
     inner, outer = [t_first], []
     lo, hi = max(0.0, t0 - SLOT_SPILL * w), min(total, t1 + SLOT_SPILL * w)
@@ -499,7 +613,8 @@ _PLACE_SEARCH_CAP = 200_000
 
 def _place_obstacles(n: int, rng: random.Random, on_route, stations,
                      run_index: int, route_key: str = "", s_end=None,
-                     must_reach=None) -> list[Obstacle]:
+                     must_reach=None, *, min_same_gap=MIN_OBSTACLE_GAP_M,
+                     min_opposite_gap=None, density: str | None = None) -> list[Obstacle]:
     """分層抽樣擺 ``n`` 個靜態障礙：**每格一個**，並排那一對佔一格。
 
     ⚠⚠ 2026-09-23 使用者指出分布不平均，實測原本的做法（全長等分 + 抖動，
@@ -530,7 +645,11 @@ def _place_obstacles(n: int, rng: random.Random, on_route, stations,
     intervals = feasible_intervals(on_route, stations, 0.25,
                                    s_range=(OBSTACLE_S_RANGE[0], s_hi))
     # 名字帶路線：兩條路線的障礙都要預先寫進同一份 USD，不能撞名
-    tag = f"{route_key}_{run_index}" if route_key else f"{run_index}"
+    if min_opposite_gap is None:
+        min_opposite_gap = min_same_gap * OPPOSITE_SIDE_GAP_RATIO
+    density_tag = f"_{density.lower()}" if density else ""
+    tag = (f"{route_key}{density_tag}_{run_index}" if route_key
+           else f"{density_tag.lstrip('_') + '_' if density_tag else ''}{run_index}")
     n_slots = max(1, n - 1)
     slots, _total = measure_slots(intervals, n_slots)
     pair_slot = _pair_slot(intervals, slots)
@@ -545,7 +664,7 @@ def _place_obstacles(n: int, rng: random.Random, on_route, stations,
     slot_opts = []                       # 每格：已通過站點淨空的選項，依偏好排序
     single_k = 0
     for i, (t0, t1) in enumerate(slots):
-        cands = _slot_s_candidates(intervals, t0, t1, rng)
+        cands = _slot_s_candidates(intervals, t0, t1, rng, min_same_gap)
         opts = []
         if i == pair_slot:
             first_side = 1.0 if rng.random() < 0.5 else -1.0
@@ -591,8 +710,11 @@ def _place_obstacles(n: int, rng: random.Random, on_route, stations,
                 raise RuntimeError(f"{route_key} run{run_index} 回溯搜尋超過 "
                                    f"{_PLACE_SEARCH_CAP} 個節點仍擺不下")
             _, sc, side, _, _ = opt
-            if not _gap_ok(prev, sc, side):
-                continue
+            if prev is not None:
+                ps, pside = prev
+                need = min_same_gap if pside == side else min_opposite_gap
+                if sc - ps < need:
+                    continue
             rest = place(i + 1, (sc, side),
                          reached or must_reach is None or sc >= must_reach)
             if rest is not None:
@@ -608,8 +730,7 @@ def _place_obstacles(n: int, rng: random.Random, on_route, stations,
                if must_reach is not None else "")
             + (f"第 {empty} 格連一個通過站點淨空的位置都沒有" if empty else
                f"每格都有可行位置，但任何組合都違反間距規則"
-               f"（同側 >= {MIN_OBSTACLE_GAP_M} m、對側 >= "
-               f"{MIN_OBSTACLE_GAP_M * OPPOSITE_SIDE_GAP_RATIO:.2f} m）"))
+               f"（同側 >= {min_same_gap} m、對側 >= {min_opposite_gap:.2f} m）"))
 
     # ── 3. 組成 Obstacle ───────────────────────────────────────────────
     out: list[Obstacle] = []
@@ -638,7 +759,55 @@ def _place_obstacles(n: int, rng: random.Random, on_route, stations,
     return out
 
 
-def variant(run_index: int, stations=None, route=None) -> SceneVariant:
+def _stress_walk_waypoints(index: int, rng: random.Random, taken,
+                           obstacle_only, s_end: float):
+    """高密度行人的確定性候選搜尋。
+
+    正式場景只有 2~8 人，沿用隨機重抽即可；20 人時若還把所有起點限制在
+    前 4 m，失敗只是生成器把人疊在一起，不是有意義的壓力。這裡把候選攤在
+    整條走廊、四條縱向 lane，仍以同一 seed 打亂順序並保留每三人一位橫越。
+    """
+    candidates = []
+    if index % 3 == 2:
+        n = max(1, int((s_end - 4.0) / 0.35))
+        for j in range(n + 1):
+            s = 2.0 + (s_end - 4.0) * j / n
+            for start_lat in (1.6, -1.6, 0.55, -0.55):
+                side = 1.0 if start_lat > 0 else -1.0
+                end_s = min(s_end - 0.4, s + 1.5)
+                if end_s - s < 1.0:
+                    end_s = max(0.4, s - 1.5)
+                candidates.append((offset_from_spine(s, start_lat),
+                                   offset_from_spine(end_s, -side * 1.6)))
+    else:
+        n = max(1, int((s_end - 2.0) / 0.35))
+        for j in range(n + 1):
+            s0 = 1.0 + (s_end - 2.0) * j / n
+            for lat in (0.55, -0.55, 1.45, -1.45):
+                prefer_forward = index % 2 == 0
+                if prefer_forward and s_end - 0.4 - s0 >= 2.5:
+                    s1 = s_end - 0.4
+                elif not prefer_forward and s0 - 0.4 >= 2.5:
+                    s1 = 0.4
+                elif s_end - 0.4 - s0 >= 2.5:
+                    s1 = s_end - 0.4
+                else:
+                    s1 = 0.4
+                candidates.append((offset_from_spine(s0, lat),
+                                   offset_from_spine(s1, lat)))
+    rng.shuffle(candidates)
+    for cand_a, cand_b in candidates:
+        cand_a = tuple(round(v, 3) for v in cand_a)
+        cand_b = tuple(round(v, 3) for v in cand_b)
+        if (_far_enough(cand_a, taken, MIN_WALKER_START_GAP_M)
+                and _far_enough(cand_b, obstacle_only, MIN_WALKER_START_GAP_M)
+                and math.dist(cand_a, cand_b) >= 2.5):
+            return cand_a, cand_b
+    return None, None
+
+
+def variant(run_index: int, stations=None, route=None,
+            density: str | None = None) -> SceneVariant:
     """產生 ``route`` 路線第 ``run_index`` 趟（1 起算）的場景。同樣的輸入永遠一樣。
 
     每條路線只在**自己會開到的那一段**分層抽樣擺障礙。
@@ -648,8 +817,12 @@ def variant(run_index: int, stations=None, route=None) -> SceneVariant:
     if stations is None:
         import ros_graph_spec as S
         stations = S.read_station_nodes(S.ROUTING_STATION_JSON)
+    density, stress = density_spec(density)
     k = min(run_index, len(OBSTACLE_COUNTS)) - 1
-    rng = random.Random(9000 + run_index)
+    # baseline seed 與既有輸出逐位元相同；壓測每階 × replicate 使用獨立 seed。
+    seed = (9000 + run_index if stress is None
+            else 19000 + list(DENSITY_LEVELS).index(density) * 1000 + run_index)
+    rng = random.Random(seed)
     import ros_graph_spec as _S
     route_key = route or _S.DEFAULT_ROUTE
     on_route = route_nodes(stations, route_key)
@@ -658,20 +831,31 @@ def variant(run_index: int, stations=None, route=None) -> SceneVariant:
     # 比主路線長的路線（c36）：延伸段至少一個障礙
     s_main = route_s_end(stations, _S.DEFAULT_ROUTE)
     must_reach = s_main if s_end > s_main + 0.5 else None
-    obs = _place_obstacles(OBSTACLE_COUNTS[k], rng, on_route, stations,
-                           run_index, route_key, s_end, must_reach)
+    n_obs = OBSTACLE_COUNTS[k] if stress is None else stress.obstacle_count
+    obs = _place_obstacles(
+        n_obs, rng, on_route, stations, run_index, route_key, s_end, must_reach,
+        min_same_gap=(MIN_OBSTACLE_GAP_M if stress is None
+                      else stress.min_same_side_gap_m),
+        min_opposite_gap=(None if stress is None
+                          else stress.min_opposite_side_gap_m),
+        density=density,
+    )
 
-    n_walk = WALKER_COUNTS[k]
+    n_walk = WALKER_COUNTS[k] if stress is None else stress.walker_count
+    walker_pool = WALKER_POOL if stress is None else STRESS_WALKER_POOL
     walks = []
     # 起點也不能壓在障礙上。第三個值是「比一個人多出來的外接半徑」——
     # 道具（最大的盆栽外接半徑 1.01 m）比人（0.25）大得多，只看中心會壓進去。
     taken = [(o.map_x, o.map_y, max(0.0, o.extent_radius - 0.25)) for o in obs]
     obstacle_only = list(taken)
     for i in range(n_walk):
-        name = WALKER_POOL[i % len(WALKER_POOL)]
+        name = walker_pool[i % len(walker_pool)]
         spd = WALKER_SPEEDS[i % len(WALKER_SPEEDS)]
         a = b = None
-        for _ in range(MAX_START_ATTEMPTS):
+        attempts = MAX_START_ATTEMPTS
+        if stress is not None:
+            a, b = _stress_walk_waypoints(i, rng, taken, obstacle_only, s_end)
+        for _ in range(attempts if stress is None else 0):
             # ⚠ 2026-09-23：範圍跟著**路線**走。原本寫死 s∈[1, 19]，c27 路線的
             #   行人會走過 c27（車根本不去的地方），c36 路線的行人卻到不了
             #   c27→c36 延伸段（最遠 s≈17.8，c36 在 20.85）。
@@ -697,7 +881,7 @@ def variant(run_index: int, stations=None, route=None) -> SceneVariant:
                 break
         if a is None:
             raise RuntimeError(
-                f"run{run_index} 第 {i} 個行人試了 {MAX_START_ATTEMPTS} 次都找不到"
+                f"run{run_index} 第 {i} 個行人試了 {attempts} 次都找不到"
                 f"離其他人/障礙 {MIN_WALKER_START_GAP_M} m 以上的起點")
         taken.append((a[0], a[1], 0.0))
         walks.append(CharacterWalk(
@@ -706,7 +890,8 @@ def variant(run_index: int, stations=None, route=None) -> SceneVariant:
 
     # 站著的人：一個角色對應一個「人形障礙」，擺在同一個位置。
     # 朝向取垂直於中心線（面向走廊另一側），輪廓比較寬、也比較像在擋路。
-    pool = [n for n in STANDING_POOL if n not in {w.name for w in walks}]
+    standing_pool = STANDING_POOL if stress is None else STRESS_STANDING_POOL
+    pool = [n for n in standing_pool if n not in {w.name for w in walks}]
     rng.shuffle(pool)
     standing = []
     for o in obs:
@@ -725,9 +910,19 @@ def variant(run_index: int, stations=None, route=None) -> SceneVariant:
         yaw = best_hd + (math.pi / 2.0 if o.map_y < 0 else -math.pi / 2.0)
         standing.append(StandingPerson(pool.pop(), o.map_x, o.map_y,
                                        round(yaw, 4)))
-    parked = _park_walkers(walks, obs, on_route, stations, s_end)
-    return SceneVariant(run_index, tuple(obs), tuple(walks), tuple(standing),
-                        tuple(parked))
+    parked = _park_walkers(
+        walks, obs, on_route, stations, s_end,
+        opposite_gap=(MIN_OBSTACLE_GAP_M * OPPOSITE_SIDE_GAP_RATIO
+                      if stress is None else stress.min_opposite_side_gap_m),
+    )
+    scene = SceneVariant(run_index, tuple(obs), tuple(walks), tuple(standing),
+                         tuple(parked), density)
+    if stress is not None and not variant_is_passable(
+            scene, route=route_key, stations=stations, include_parked=True):
+        raise RuntimeError(
+            f"{route_key} {density} run{run_index} 沒有寬度 >= "
+            f"{MIN_PASSAGE_WIDTH_M:.1f} m 的通道；拒絕產生不可通行壓測場景")
+    return scene
 
 
 def spine_coords(p, step: float = 0.05):
@@ -750,7 +945,7 @@ _PARK_STEP_M = 0.25
 _PARK_SAME_SIDE_CLEAR_M = 0.3
 
 
-def _park_walkers(walks, obs, on_route, stations, s_end):
+def _park_walkers(walks, obs, on_route, stations, s_end, *, opposite_gap=None):
     """static 情境：會走的行人這趟不走，停在哪裡。
 
     ⚠⚠ 2026-09-23 c27 static run4 導航失敗：Character_10 停在 USD 原位，
@@ -769,7 +964,8 @@ def _park_walkers(walks, obs, on_route, stations, s_end):
     不會全擠在起點附近。完全確定性（不抽亂數），不影響其他抽樣。
     找不到位置的人**不出現**（static 時停用），不硬塞。
     """
-    opp_gap = MIN_OBSTACLE_GAP_M * OPPOSITE_SIDE_GAP_RATIO
+    opp_gap = (MIN_OBSTACLE_GAP_M * OPPOSITE_SIDE_GAP_RATIO
+               if opposite_gap is None else opposite_gap)
     # (s, side, x, y, 外接半徑)
     placed = []
     for o in obs:
@@ -824,7 +1020,7 @@ def _park_walkers(walks, obs, on_route, stations, s_end):
     return out
 
 
-def all_variant_obstacles(n_runs: int = 4, stations=None):
+def all_variant_obstacles(n_runs: int = 4, stations=None, densities=()):
     """所有變體用到的障礙聯集，供離線寫進 USD。
 
     為什麼要全部寫進 USD 而不是執行期建：執行期新建的 prim 不保證進算圖
@@ -837,4 +1033,44 @@ def all_variant_obstacles(n_runs: int = 4, stations=None):
     for rk in _S.ROUTE_ORDER:
         for i in range(1, n_runs + 1):
             out.extend(variant(i, stations=stations, route=rk).obstacles)
+        for density in densities:
+            for i in range(1, n_runs + 1):
+                out.extend(variant(i, stations=stations, route=rk,
+                                   density=density).obstacles)
     return tuple(out)
+
+
+def preflight_density_variants(n_runs: int = 4, stations=None,
+                               densities=tuple(DENSITY_LEVELS)):
+    """離線產生並驗證所有壓測場景，供批次開跑前 fail-fast。
+
+    回傳以 ``(density, route, run_index)`` 為 key 的簡短摘要；任何數量、角色
+    唯一性或 0.9 m 可通行 gate 失敗都直接丟例外，不會讓批次帶病開跑。
+    """
+    import ros_graph_spec as S
+
+    if stations is None:
+        stations = S.read_station_nodes(S.ROUTING_STATION_JSON)
+    out = {}
+    for density in densities:
+        key, spec = density_spec(density)
+        for route_key in S.ROUTE_ORDER:
+            for run_index in range(1, n_runs + 1):
+                scene = variant(run_index, stations=stations, route=route_key,
+                                density=key)
+                if len(scene.obstacles) != spec.obstacle_count:
+                    raise RuntimeError(f"{route_key} {key} run{run_index} 障礙數錯誤")
+                if len(scene.walks) != spec.walker_count:
+                    raise RuntimeError(f"{route_key} {key} run{run_index} 行人數錯誤")
+                walk_names = {w.name for w in scene.walks}
+                stand_names = {p.name for p in scene.standing}
+                if len(walk_names) != len(scene.walks) or walk_names & stand_names:
+                    raise RuntimeError(f"{route_key} {key} run{run_index} 角色重複指派")
+                out[(key, route_key, run_index)] = {
+                    "obstacles": len(scene.obstacles),
+                    "walkers": len(scene.walks),
+                    "standing": len(scene.standing),
+                    "parked": len(scene.parked),
+                    "passage_width_m": MIN_PASSAGE_WIDTH_M,
+                }
+    return out

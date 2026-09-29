@@ -76,6 +76,34 @@ OBSTACLE_ROOT = "/World/SimObstacles"
 CHARACTER_ROOT = "/World/Characters"
 MAP_PATCH_PATH = "/World/MapPatch"
 
+#: 壓力測試 S3 需要同時容納 20 位走動行人，以及最多 7 位站立人物。
+#: 原場景可用的 walker 只有 10 位，因此預建 10 位新角色；原本沒有被 walker
+#: 使用的 8 位角色可繼續當站立人物。角色一定要在 USD 建置期寫入，執行期才
+#: 建 prim 會來不及被 Isaac 的算圖／碰撞管線可靠地載入。
+PEOPLE_ASSET_ROOT = (
+    "https://omniverse-content-production.s3-us-west-2.amazonaws.com/"
+    "Assets/Isaac/5.1/Isaac/People/Characters"
+)
+PEOPLE_CHARACTER_ASSETS: tuple[str, ...] = (
+    "F_Business_02",
+    "F_Medical_01",
+    "M_Medical_01",
+    "female_adult_police_01_new",
+    "female_adult_police_02",
+)
+STRESS_CHARACTER_NAMES: tuple[str, ...] = tuple(
+    f"Character_{i:02d}" for i in range(20, 30)
+)
+STRESS_CHARACTER_SPECS: tuple[tuple[str, str], ...] = tuple(
+    (name, PEOPLE_CHARACTER_ASSETS[i % len(PEOPLE_CHARACTER_ASSETS)])
+    for i, name in enumerate(STRESS_CHARACTER_NAMES)
+)
+
+
+def people_asset_url(asset: str) -> str:
+    """回傳 Isaac 5.1 People 角色的完整 USD URL。"""
+    return f"{PEOPLE_ASSET_ROOT}/{asset}/{asset}.usd"
+
 #: TF 停用的雙保險：導到沒人訂閱的 topic。
 DEAD_TF_TOPIC = "/isaac_tf_disabled"
 
@@ -788,6 +816,37 @@ def place_map_patch(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Change]:
                    f"體素 {VOXEL_M} m  z∈[{zl},{zh})  隱形＋靜態碰撞體")]
 
 
+def add_stress_test_characters(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Change]:
+    """預建 S3 壓力測試需要的 10 位 People 角色。
+
+    新角色只 author 一個乾淨的 People asset reference，不複製既有角色的 prim
+    subtree。這點很重要：複製 ``Character_04`` 也會把它曾經的 5.3 m 內層
+    ``ManRoot`` 偏移一起複製，產生新的鬼影。
+
+    初始位置沿 world +Y 每 3 m 停放，接續原場景 ``Character_14`` 的排列。
+    執行壓力測試時，``scene_variants``／``CharacterWalkDriver`` 會在模擬開始前
+    把被選中的角色搬到實際路徑；未被選中的角色會被停用。遠端初始位置可避免
+    載入到搬移之間與車或既有角色重疊。
+    """
+    _require(stage, CHARACTER_ROOT)
+    changes: list[Change] = []
+    for i, (name, asset) in enumerate(STRESS_CHARACTER_SPECS):
+        path = f"{CHARACTER_ROOT}/{name}"
+        if stage.GetPrimAtPath(path).IsValid():
+            # 讓直接重複 apply_spec 也保持冪等；正式 build 每次從原 USD 開始。
+            continue
+
+        xform = UsdGeom.Xform.Define(stage, path)
+        prim = xform.GetPrim()
+        prim.GetReferences().AddReference(people_asset_url(asset))
+        xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 25.0 + 3.0 * i, 0.0))
+        xform.AddOrientOp().Set(Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0)))
+        xform.AddScaleOp().Set(Gf.Vec3f(1.0, 1.0, 1.0))
+        changes.append(Change(path, "People 角色 reference", None,
+                              f"{asset}（初始停放 world y={25.0 + 3.0 * i:.1f} m）"))
+    return changes
+
+
 def zero_character_inner_offsets(stage: Usd.Stage, spec: S.SimRosSpec) -> list[Change]:
     """把角色**內層**被移動過的位移歸零，讓身體就在我們驅動的根節點上。
 
@@ -819,7 +878,16 @@ def zero_character_inner_offsets(stage: Usd.Stage, spec: S.SimRosSpec) -> list[C
             v = attr.Get()
             if v is None or all(abs(c) < 1e-6 for c in v):
                 continue
-            attr.Set(Gf.Vec3d(0.0, 0.0, 0.0))
+            # xformOp:translate 可以是 half3 / float3 / double3；依原精度寫值，
+            # 否則新 People asset 若使用 float precision，Set(Vec3d) 可能失敗。
+            type_name = attr.GetTypeName()
+            if type_name == Sdf.ValueTypeNames.Half3:
+                zero = Gf.Vec3h(0.0, 0.0, 0.0)
+            elif type_name == Sdf.ValueTypeNames.Float3:
+                zero = Gf.Vec3f(0.0, 0.0, 0.0)
+            else:
+                zero = Gf.Vec3d(0.0, 0.0, 0.0)
+            attr.Set(zero)
             changes.append(Change(str(prim.GetPath()), "xformOp:translate",
                                   tuple(round(c, 3) for c in v), (0.0, 0.0, 0.0)))
     return changes
@@ -836,6 +904,7 @@ STEPS = (
     ("velodyne 物理關節對齊 URDF（執行期生效）", align_sensor_joint_to_urdf),
     ("NavFloor 抬高對齊走廊地板", align_navmesh_floor_to_corridor),
     ("停用無資料的 2D 光達", disable_broken_2d_lidars),
+    ("預建 S3 壓力測試角色", add_stress_test_characters),
     ("角色內層位移歸零（身體對齊根節點）", zero_character_inner_offsets),
     ("走廊障礙物", place_corridor_obstacles),
     ("地圖補丁（天花板層）", place_map_patch),
@@ -893,8 +962,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.obstacles:
         # 把**所有 run 變體**的障礙一起寫進 USD，執行期只用 SetActive 開關
         # （執行期新建 prim 不保證進算圖 —— 見 all_variant_obstacles 的說明）。
-        from scene_variants import all_variant_obstacles
-        spec = replace(spec, obstacles=all_variant_obstacles())
+        # 壓力測試 S1~S3 會產生不同名稱的 prim，也必須在這次離線建置時
+        # 一併 author；否則 run_isaac_sim 只會找得到正式 run1~run4 的障礙。
+        from scene_variants import DENSITY_LEVELS, all_variant_obstacles
+        spec = replace(
+            spec,
+            obstacles=all_variant_obstacles(densities=tuple(DENSITY_LEVELS)),
+        )
     if args.map_patch:
         spec = replace(spec, map_patch=True)
     report = build(args.input, args.output, spec)

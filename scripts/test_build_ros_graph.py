@@ -14,7 +14,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from pxr import Usd, UsdGeom
+from pxr import Gf, Sdf, Usd, UsdGeom
 
 import build_ros_graph as B
 import ros_graph_spec as S
@@ -555,3 +555,60 @@ def test_character_bodies_sit_on_their_root(stage: Usd.Stage):
                 if v is not None and any(abs(c) > 1e-6 for c in v):
                     bad.append((str(prim.GetPath()), tuple(v)))
     assert not bad, bad
+
+
+def test_stress_test_characters_are_prebuilt_with_clean_references(stage: Usd.Stage):
+    """S3 要 20 walkers；新增的 10 人必須在 USD 內預建，不能執行期才造 prim。
+
+    只建立乾淨 asset reference，不從 Character_04 複製 subtree，才能保證不會
+    把它曾有的 ManRoot 5.3 m 偏移一併複製。
+    """
+    root = stage.GetPrimAtPath(B.CHARACTER_ROOT)
+    names = {p.GetName() for p in root.GetChildren()}
+    assert set(B.STRESS_CHARACTER_NAMES) <= names
+
+    for name, asset in B.STRESS_CHARACTER_SPECS:
+        prim = stage.GetPrimAtPath(f"{B.CHARACTER_ROOT}/{name}")
+        refs = prim.GetMetadata("references")
+        items = refs.GetAddedOrExplicitItems() if refs else []
+        assert [str(r.assetPath) for r in items] == [B.people_asset_url(asset)]
+
+
+def test_new_character_initial_positions_are_separate_and_safe(stage: Usd.Stage):
+    """載入至變體搬位前，新角色不可全疊在原點或貼著機器人。"""
+    positions = []
+    for name in B.STRESS_CHARACTER_NAMES:
+        prim = stage.GetPrimAtPath(f"{B.CHARACTER_ROOT}/{name}")
+        t = prim.GetAttribute("xformOp:translate").Get()
+        positions.append(tuple(float(v) for v in t))
+    assert len(set(positions)) == len(positions)
+    assert all(p[0] == pytest.approx(0.0) and p[1] >= 25.0
+               and p[2] == pytest.approx(0.0) for p in positions)
+    assert all(positions[i + 1][1] - positions[i][1] >= 3.0
+               for i in range(len(positions) - 1))
+
+
+@pytest.mark.parametrize(
+    ("type_name", "offset"),
+    [
+        (Sdf.ValueTypeNames.Float3, Gf.Vec3f(1.0, -2.0, 0.5)),
+        (Sdf.ValueTypeNames.Double3, Gf.Vec3d(1.0, -2.0, 0.5)),
+    ],
+)
+def test_character_body_alignment_handles_new_names_and_xform_precision(type_name, offset):
+    """對齊修正不可只認 Character_04，也要能處理新角色與 float3 xform。"""
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.Xform.Define(stage, B.CHARACTER_ROOT)
+    character = UsdGeom.Xform.Define(stage, f"{B.CHARACTER_ROOT}/Character_99")
+    character.AddTranslateOp().Set(Gf.Vec3d(9.0, 8.0, 7.0))
+    body = stage.DefinePrim(
+        f"{B.CHARACTER_ROOT}/Character_99/AnyAsset/BodyRoot", "Xform")
+    body.CreateAttribute("xformOp:translate", type_name).Set(offset)
+    body.CreateAttribute("xformOpOrder", Sdf.ValueTypeNames.TokenArray).Set(
+        ["xformOp:translate"])
+
+    changes = B.zero_character_inner_offsets(stage, S.SimRosSpec())
+
+    assert len(changes) == 1
+    assert tuple(body.GetAttribute("xformOp:translate").Get()) == pytest.approx((0, 0, 0))
+    assert tuple(character.GetPrim().GetAttribute("xformOp:translate").Get()) == (9, 8, 7)
